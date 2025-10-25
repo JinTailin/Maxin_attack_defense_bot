@@ -29,17 +29,17 @@ from . import get_logger, setup_logging
 log = get_logger(__name__)
 
 # ---------- 按你的要求：硬编码 token ----------
-# 后端 API 前缀（a.docx 示例）
+# 后端 API 前缀
 BASE_URL = "http://10.1.0.220:9002/api"
 
-# 你的个人 token（用于对话、你自己的数据库操作）
-USER_TOKEN = "svrdAPQFp0I9K0VSeEa9G0Gvy9aU4vSbI8Ft4QKoRzRq0-K8ayGs4xKhdNmh8xzl"
+# 你的组与个人 token
+USER_TOKEN = "svrdAPQFp0I9K0VSeEa9G0Gvy9aU4vSbI8Ft4QKoRzRq0-K8ayGs4xKhdNmh8xzl"  # Group10
 
-# 共享库 common_dataset 的 token（只读，用于对 common_dataset 检索）
+# 共享库配置（只读）
 COMMON_DB_NAME = "common_dataset"
 COMMON_DB_TOKEN = "token_common"
 
-DEFAULT_METRIC = "cosine"
+DEFAULT_METRIC = "COSINE"  # 文档是大写
 TIMEOUT = 30
 
 
@@ -148,7 +148,7 @@ class APIClient:
             "token": token,
             "query": query,
             "top_k": int(top_k),
-            "metric_type": metric_type,
+            "metric_type": (metric_type or DEFAULT_METRIC).upper(),
             "score_threshold": float(score_threshold),
         }
         if expr:
@@ -172,7 +172,7 @@ def extract_context_from_search(search_resp: Dict[str, Any], max_chars: int = 16
     每个元素包含 file_id / text / uploaded_at / metadata / score
     """
     data = search_resp.get("data", {})
-    files = data.get("files") or data.get("data") or []
+    files = data.get("files") or data.get("data") or data.get("results") or []
     if not isinstance(files, list):
         return ""
 
@@ -204,6 +204,11 @@ def direct_dialogue_flow(api: APIClient, settings: Settings, query: str) -> Dict
     resp = api.dialogue(user_input=safe_text, token=settings.user_token, custom_prompt=cp)
     return _normalize_dialogue_output(resp)
 
+def _token_for_db(db_name: str, settings: Settings) -> str:
+    # 共享库名写死判断，避免把 COMMON_DB_NAME 改错
+    if db_name.strip().lower() == "common_dataset":
+        return settings.common_db_token
+    return settings.user_token
 
 def rag_dialogue_flow(api: APIClient, settings: Settings, query: str) -> Dict[str, Any]:
     ok, safe_text = validate_user_input(query)
@@ -211,7 +216,7 @@ def rag_dialogue_flow(api: APIClient, settings: Settings, query: str) -> Dict[st
         return {"ok": False, "message": safe_text}
 
     # 针对共享库 common_dataset：使用 COMMON_DB_TOKEN；否则用 USER_TOKEN
-    token_for_db = settings.common_db_token if settings.db_name == COMMON_DB_NAME else settings.user_token
+    token_for_db = _token_for_db(settings.db_name, settings)
 
     search_resp = api.search(
         db_name=settings.db_name,
@@ -260,6 +265,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--score-threshold", type=float, default=0.0, help="最小相似度阈值 0-1")
     p.add_argument("--max-ctx-chars", type=int, default=1600, help="上下文拼接的最大字符数")
     p.add_argument("--log-level", default="INFO", help="日志等级")
+    p.add_argument("--expr", default=None, help="Milvus 过滤表达式，可选")
     return p.parse_args()
 
 
