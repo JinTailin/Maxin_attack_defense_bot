@@ -25,6 +25,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 from . import get_logger, setup_logging
+from .config import Settings, token_for_db
+from .api_client import APIClient
 
 log = get_logger(__name__)
 
@@ -215,13 +217,13 @@ def rag_dialogue_flow(api: APIClient, settings: Settings, query: str) -> Dict[st
     if not ok:
         return {"ok": False, "message": safe_text}
 
-    # 针对共享库 common_dataset：使用 COMMON_DB_TOKEN；否则用 USER_TOKEN
-    token_for_db = _token_for_db(settings.db_name, settings)
+    
+    token_for_this_db = token_for_db(settings.db_name, settings)
 
     search_resp = api.search(
         db_name=settings.db_name,
         query=safe_text,
-        token=token_for_db,
+        token=token_for_this_db,
         top_k=settings.top_k,
         metric_type=settings.metric_type,
         score_threshold=settings.score_threshold,
