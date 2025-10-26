@@ -27,10 +27,12 @@ import requests
 from . import get_logger, setup_logging
 from .config import Settings, token_for_db
 from .api_client import APIClient
+from .data_processor import extract_context, files_to_citations
+from .prompt_builder import build_prompt
 
 log = get_logger(__name__)
 
-# ---------- 按你的要求：硬编码 token ----------
+# ---------- 硬编码 token ----------
 # 后端 API 前缀
 BASE_URL = "http://10.1.0.220:9002/api"
 
@@ -85,23 +87,6 @@ def validate_prompt(prompt: str) -> Tuple[bool, str]:
     if len(prompt) > 8000:
         return False, "生成的提示词过长，超过安全阈值。"
     return True, prompt
-
-
-# -------------------- Prompt 组装（结合 custom_prompt + user_input） --------------------
-def build_custom_prompt(context: str, mode: str = "direct") -> str:
-    boundary = (
-        "【系统指令】你是一名网络安全助教，只提供防御、检测、合规与科普信息；"
-        "对攻击利用、漏洞利用链、可复用攻击样例与敏感数据一律拒答。"
-        "若不确定请明确说明，禁止编造。"
-    )
-    instructions = [
-        boundary,
-        f"【模式】{mode}",
-        "【回答要求】结构化、分点说明；尽量引用来源编号 [1][2]；如需给出步骤，务必为防御/检测流程。",
-    ]
-    if context:
-        instructions.append("【已知信息，仅可参考】\n" + context.strip())
-    return "\n".join(instructions)
 
 
 # -------------------- API 封装（按 a.docx） --------------------
@@ -167,38 +152,13 @@ def _parse_response(resp: requests.Response) -> Dict[str, Any]:
     return {"http_status": resp.status_code, "data": data}
 
 
-# -------------------- RAG：检索结果转上下文 --------------------
-def extract_context_from_search(search_resp: Dict[str, Any], max_chars: int = 1600) -> str:
-    """
-    按 a.docx：search 返回 data.files 列表
-    每个元素包含 file_id / text / uploaded_at / metadata / score
-    """
-    data = search_resp.get("data", {})
-    files = data.get("files") or data.get("data") or data.get("results") or []
-    if not isinstance(files, list):
-        return ""
-
-    chunks: List[str] = []
-    for i, item in enumerate(files, 1):
-        text = str(item.get("text", "")).strip()
-        src = item.get("file_id", f"doc#{i}")
-        score = item.get("score", "")
-        meta = item.get("metadata", {})
-        meta_str = f" metadata={meta}" if meta else ""
-        prefix = f"[{i}] 来源: {src} 分数: {score}{meta_str}"
-        if text:
-            chunks.append(prefix + "\n" + text)
-    joined = "\n\n---\n\n".join(chunks)
-    return joined[:max_chars] if len(joined) > max_chars else joined
-
-
 # -------------------- 流程 --------------------
 def direct_dialogue_flow(api: APIClient, settings: Settings, query: str) -> Dict[str, Any]:
     ok, safe_text = validate_user_input(query)
     if not ok:
         return {"ok": False, "message": safe_text}
 
-    custom_prompt = build_custom_prompt(context="", mode="direct")
+    custom_prompt = build_prompt(context="", mode="direct")
     ok, cp = validate_prompt(custom_prompt)
     if not ok:
         return {"ok": False, "message": cp}
@@ -232,16 +192,21 @@ def rag_dialogue_flow(api: APIClient, settings: Settings, query: str) -> Dict[st
     if search_resp.get("http_status") != 200 or search_resp.get("data", {}).get("status") != "success":
         return {"ok": False, "message": f"检索失败: {search_resp}"}
 
-    context = extract_context_from_search(search_resp, max_chars=settings.max_ctx_chars)
-    custom_prompt = build_custom_prompt(context=context, mode="rag")
+    # 提取上下文
+    context = extract_context(search_resp, max_chars=settings.max_ctx_chars)
+    # 生成引用
+    citations = files_to_citations(search_resp)
+
+    custom_prompt = build_prompt(context=context, mode="rag")
     ok, cp = validate_prompt(custom_prompt)
     if not ok:
         return {"ok": False, "message": cp}
 
-    # 对话仍使用你的个人 token
+    # 对话使用小组 token
     resp = api.dialogue(user_input=safe_text, token=settings.user_token, custom_prompt=cp)
     result = _normalize_dialogue_output(resp)
     result["context_preview"] = context
+    result["citations"] = citations
     return result
 
 
