@@ -3,10 +3,11 @@
 ## 用法
 
 1. 创建conda虚拟环境 & 安装项目依赖：
+
    conda create -n attack-bot python=3.12
 
    conda activate attack-bot
-   
+
    pip install -r requirements.txt
 
 2. 运行直接模式查询：（示例问题：防火墙的作用是什么？）
