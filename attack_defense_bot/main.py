@@ -29,6 +29,7 @@ from .config import Settings, token_for_db
 from .api_client import APIClient
 from .data_processor import extract_context, files_to_citations
 from .prompt_builder import build_prompt
+from .guard import validate_user_input, validate_prompt
 
 log = get_logger(__name__)
 
@@ -58,36 +59,6 @@ class Settings:
     top_k: int = 5
     score_threshold: float = 0.0
     max_ctx_chars: int = 1600
-
-
-# -------------------- 基础安全校验（最简后备实现） --------------------
-def validate_user_input(text: str) -> Tuple[bool, str]:
-    """
-    返回：(通过与否, 处理后的文本或拒绝原因)
-    """
-    blacklist = [
-        "payload",
-        "rce",
-        "反序列化利用",
-        "木马",
-        "注入语句",
-        "爆破字典",
-        "0day",
-        "绕过waf",
-    ]
-    lowered = text.lower()
-    if any(w in lowered for w in blacklist):
-        return False, "你的问题涉及潜在攻击利用或敏感内容，我只能提供防御、检测与合规层面的信息。"
-    return True, text.strip()
-
-
-def validate_prompt(prompt: str) -> Tuple[bool, str]:
-    if not prompt or len(prompt) < 5:
-        return False, "生成的提示词过短或为空。"
-    if len(prompt) > 8000:
-        return False, "生成的提示词过长，超过安全阈值。"
-    return True, prompt
-
 
 # -------------------- API 封装（按 a.docx） --------------------
 class APIClient:
@@ -260,4 +231,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # breakpoint()
     main()
