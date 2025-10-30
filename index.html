@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>安全AI助手</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --primary-color: #667eea;
+            --bg-dark: #1a1a2e;
+            --bg-card: #16213e;
+            --text-light: #e94560;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: linear-gradient(135deg, #1a1a2e 0%, #0f3460 100%);
+            color: #fff;
+            height: 100vh;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* 顶部导航 */
+        .navbar {
+            background: rgba(26, 26, 46, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 1rem 2rem;
+            box-shadow: 0 2px 20px rgba(0, 0, 0, 0.3);
+        }
+
+        .navbar-brand {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: #4caf50;
+            font-size: 0.9rem;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: #4caf50;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        /* 主聊天区域 */
+        .chat-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            max-width: 900px;
+            width: 100%;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1.5rem;
+            background: rgba(22, 33, 62, 0.6);
+            border-radius: 20px;
+            margin-bottom: 1.5rem;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        /* 消息样式 */
+        .message {
+            margin-bottom: 1.5rem;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message-content {
+            max-width: 80%;
+            padding: 1rem 1.5rem;
+            border-radius: 18px;
+            line-height: 1.6;
+            word-wrap: break-word;
+        }
+
+        .message.user {
+            text-align: right;
+        }
+
+        .message.user .message-content {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            margin-left: auto;
+        }
+
+        .message.ai .message-content {
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .message-time {
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.5);
+            margin-top: 0.5rem;
+        }
+
+        /* 输入区域 */
+        .input-container {
+            display: flex;
+            gap: 1rem;
+            padding: 1.5rem;
+            background: rgba(22, 33, 62, 0.6);
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .query-input {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 1rem 1.5rem;
+            border-radius: 50px;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }
+
+        .query-input:focus {
+            outline: none;
+            background: rgba(255, 255, 255, 0.15);
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.2);
+        }
+
+        .query-input::placeholder {
+            color: rgba(255, 255, 255, 0.5);
+        }
+
+        .send-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            flex-shrink: 0;
+        }
+
+        .send-btn:hover {
+            transform: scale(1.1);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .send-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* 加载动画 */
+        .typing-indicator {
+            display: none;
+            text-align: center;
+            padding: 1rem;
+            color: var(--primary-color);
+        }
+
+        .typing-indicator.active {
+            display: block;
+        }
+
+        .typing-dots {
+            display: inline-flex;
+            gap: 0.3rem;
+        }
+
+        .typing-dots span {
+            width: 8px;
+            height: 8px;
+            background: var(--primary-color);
+            border-radius: 50%;
+            animation: typing 1.4s infinite;
+        }
+
+        .typing-dots span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-dots span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes typing {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-10px); }
+        }
+
+        .citation {
+            background: rgba(102, 126, 234, 0.15);
+            border-left: 3px solid var(--primary-color);
+            padding: 0.8rem;
+            margin: 0.5rem 0;
+            border-radius: 5px;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+        }
+
+        .citation:hover {
+            background: rgba(102, 126, 234, 0.25);
+            transform: translateX(5px);
+        }
+
+        /* 折叠框样式 */
+        .context-preview {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 1rem;
+            border-radius: 10px;
+            margin-top: 1rem;
+            font-size: 0.9rem;
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid rgba(102, 126, 234, 0.3);
+            transition: all 0.3s ease;
+        }
+
+        .context-preview:hover {
+            border-color: rgba(102, 126, 234, 0.5);
+            background: rgba(0, 0, 0, 0.4);
+        }
+
+        .context-preview summary {
+            cursor: pointer;
+            color: var(--primary-color);
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            padding: 0.3rem;
+            border-radius: 5px;
+            transition: background 0.3s ease;
+        }
+
+        .context-preview summary:hover {
+            background: rgba(102, 126, 234, 0.1);
+        }
+
+        /* 引用在折叠框内的样式 - 更清晰的分隔 */
+        .context-preview .citation {
+            background: rgba(102, 126, 234, 0.15);
+            border-left: 3px solid var(--primary-color);
+            padding: 0.8rem;
+            margin: 0.8rem 0;  /* 增加间距 */
+            border-radius: 5px;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            border-bottom: 1px solid rgba(102, 126, 234, 0.2);  /* 添加底部边框 */
+        }
+
+        .context-preview .citation:hover {
+            background: rgba(102, 126, 234, 0.25);
+            transform: translateX(5px);
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+        }
+
+        /* 引用编号样式 */
+        .context-preview .citation strong {
+            color: var(--primary-color);
+            display: block;
+            margin-bottom: 0.3rem;
+            font-size: 0.85rem;
+        }
+
+        /* 折叠动画 */
+        details[open] summary {
+            color: #764ba2;
+        }
+
+        /* 为不同类型的内容添加不同的图标 */
+        .context-preview summary:nth-of-type(1) {
+            color: #667eea;
+        }
+
+        /* 上下文项样式 - 与引用样式保持一致 */
+        .context-preview .context-item {
+            background: rgba(0, 0, 0, 0.4);
+            border-left: 3px solid #28a745;  /* 使用绿色区分上下文 */
+            padding: 0.8rem;
+            margin: 0.8rem 0;
+            border-radius: 5px;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            border-bottom: 1px solid rgba(40, 167, 69, 0.2);
+            font-family: 'Courier New', monospace;  /* 等宽字体更适合代码/文本 */
+        }
+
+        .context-preview .context-item:hover {
+            background: rgba(0, 0, 0, 0.5);
+            transform: translateX(5px);
+            box-shadow: 0 2px 8px rgba(40, 167, 69, 0.3);
+        }
+
+        /* 上下文编号样式 */
+        .context-preview .context-item strong {
+            color: #28a745;  /* 绿色 */
+            display: block;
+            margin-bottom: 0.3rem;
+            font-size: 0.85rem;
+        }
+
+        /* 代码样式 */
+        .context-preview .context-item code {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 0.2rem 0.4rem;
+            border-radius: 3px;
+            font-size: 0.9rem;
+            word-break: break-all;
+        }
+
+        /* 为不同类型的内容添加不同的图标颜色 */
+        .context-preview summary {
+            color: var(--primary-color);
+        }
+
+        .context-preview[open] summary:first-of-type {
+            color: #764ba2;
+        }
+
+        /* 当有多个details时，给第二个（上下文）不同的图标颜色 */
+        .context-preview:nth-of-type(2) summary {
+            color: #28a745;
+        }
+
+        .context-preview:nth-of-type(2)[open] summary {
+            color: #1e7e34;
+        }
+
+        /* 滚动条样式 */
+        .chat-messages::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .chat-messages::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+        }
+
+        .chat-messages::-webkit-scrollbar-thumb {
+            background: rgba(102, 126, 234, 0.5);
+            border-radius: 10px;
+        }
+
+        .chat-messages::-webkit-scrollbar-thumb:hover {
+            background: rgba(102, 126, 234, 0.7);
+        }
+
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+            .chat-container {
+                padding: 1rem;
+            }
+            
+            .message-content {
+                max-width: 90%;
+            }
+            
+            .navbar {
+                padding: 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- 顶部导航 -->
+    <nav class="navbar">
+        <div class="d-flex justify-content-between align-items-center w-100">
+            <span class="navbar-brand">
+                <i class="bi bi-shield-lock-fill me-2"></i>
+                安全AI助手
+            </span>
+            <div class="d-flex align-items-center gap-3">
+                <div class="status-indicator">
+                    <span class="status-dot"></span>
+                    <span>在线</span>
+                </div>
+                <button class="btn btn-outline-light btn-sm" onclick="clearHistory()">
+                    <i class="bi bi-arrow-clockwise me-1"></i>清空对话
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- 主聊天区域 -->
+    <div class="chat-container">
+        <div class="chat-messages" id="chatMessages">
+            <div class="message ai">
+                <div class="message-content">
+                    👋 您好！我是安全AI助手，专注于网络安全攻防知识问答。我可以帮助您了解防火墙配置、SQL注入防御、XSS攻击防护等安全知识。请随时提问！
+                </div>
+                <div class="message-time">AI助手 · 刚刚</div>
+            </div>
+        </div>
+
+        <div class="typing-indicator" id="typingIndicator">
+            <div class="typing-dots">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+            <span class="ms-2">AI正在思考中...</span>
+        </div>
+
+        <div class="input-container">
+            <input type="text" class="query-input" id="queryInput" 
+                   placeholder="输入您的问题..." onkeypress="handleKeyPress(event)">
+            <button class="send-btn" id="sendBtn" onclick="sendQuery()">
+                <i class="bi bi-send-fill"></i>
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // 配置 - 确保使用正确的后端URL
+        const BACKEND_URL = 'http://localhost:8000';
+        
+        // 处理回车键
+        function handleKeyPress(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendQuery();
+            }
+        }
+
+        // 发送查询 - 修改引用为可折叠
+        async function sendQuery() {
+            const queryInput = document.getElementById('queryInput');
+            const query = queryInput.value.trim();
+            
+            if (!query) return;
+            
+            // 添加用户消息
+            addMessage('user', query);
+            queryInput.value = '';
+            
+            // 禁用发送按钮
+            const sendBtn = document.getElementById('sendBtn');
+            sendBtn.disabled = true;
+            
+            // 显示加载动画
+            document.getElementById('typingIndicator').classList.add('active');
+            
+            try {
+                console.log('🚀 发送请求:', query);
+                
+                const response = await fetch(`${BACKEND_URL}/api/query`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        mode: 'rag',
+                        query: query
+                    })
+                });
+                
+                console.log('📡 响应状态:', response.status);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                console.log('📥 响应数据:', data);
+                
+                // 处理响应
+                if (data && data.ok === true) {
+                    let message = data.response || '抱歉，无法回答您的问题。';
+                    
+                // 处理引用数据 - 修复分割问题
+                if (data.citations) {
+                    console.log('🔍 处理引用数据...');
+                    console.log('原始引用数据:', data.citations);
+                    
+                    // 确保citations是数组
+                    let citationsArray = [];
+                    
+                    if (Array.isArray(data.citations)) {
+                        // 如果已经是数组，处理每个元素
+                        citationsArray = data.citations.flatMap(item => {
+                            if (typeof item === 'string') {
+                                // 尝试按换行符分割
+                                return item.split(/[\n\r]+/).filter(line => line.trim());
+                            }
+                            return [String(item)];
+                        });
+                    } else if (typeof data.citations === 'string') {
+                        // 如果是字符串，按多种方式分割
+                        const citationsStr = data.citations;
+                        
+                        // 尝试不同的分割方式
+                        if (citationsStr.includes('\n') || citationsStr.includes('\r')) {
+                            // 按换行符分割
+                            citationsArray = citationsStr.split(/[\n\r]+/)
+                                .map(line => line.trim())
+                                .filter(line => line.length > 0);
+                        } else if (citationsStr.includes(';')) {
+                            // 按分号分割
+                            citationsArray = citationsStr.split(';')
+                                .map(line => line.trim())
+                                .filter(line => line.length > 0);
+                        } else if (citationsStr.includes(',')) {
+                            // 按逗号分割
+                            citationsArray = citationsStr.split(',')
+                                .map(line => line.trim())
+                                .filter(line => line.length > 0);
+                        } else {
+                            // 如果没有明显分隔符，作为一个引用
+                            citationsArray = [citationsStr];
+                        }
+                        
+                        // 尝试解析JSON（以防是JSON字符串）
+                        if (citationsArray.length === 1) {
+                            try {
+                                const parsed = JSON.parse(citationsArray[0]);
+                                if (Array.isArray(parsed)) {
+                                    citationsArray = parsed;
+                                }
+                            } catch {
+                                // 不是JSON，保持原样
+                            }
+                        }
+                    } else {
+                        // 其他类型，转为字符串
+                        citationsArray = [String(data.citations)];
+                    }
+                    
+                    // 清理和去重
+                    citationsArray = citationsArray
+                        .map(citation => citation.replace(/^["'"]|["'"]$/g, '').trim()) // 去掉引号
+                        .filter(citation => citation.length > 0)
+                        .filter((citation, index, arr) => arr.indexOf(citation) === index); // 去重
+                    
+                    console.log('📚 处理后的引用数组:', citationsArray);
+                    console.log('📚 引用数量:', citationsArray.length);
+                    
+                    // 将引用改为可折叠样式，每个引用单独显示
+                    if (citationsArray.length > 0) {
+                        let citationsHtml = '';
+                        citationsArray.forEach((citation, index) => {
+                            if (citation && citation.trim()) {
+                                citationsHtml += `<div class="citation mb-2">
+                                    <strong>来源 ${index + 1}:</strong> ${citation}
+                                </div>`;
+                            }
+                        });
+                        
+                        message += `<details class="context-preview">
+                            <summary>📚 查看参考来源 (${citationsArray.length})</summary>
+                            <div class="mt-3">
+                                ${citationsHtml}
+                            </div>
+                        </details>`;
+                    }
+                }
+                    
+                // 添加上下文预览
+                if (data.context_preview) {
+                    // 按分隔符 --- 分割成文档块
+                    const documentBlocks = data.context_preview.split(/---+/).filter(block => block.trim());
+                    
+                    let contextHtml = '';
+                    documentBlocks.forEach((block, index) => {
+                        const lines = block.split('\n').filter(line => line.trim());
+                        
+                        if (lines.length > 0) {
+                            // 提取来源信息
+                            let sourceInfo = '';
+                            let question = '';
+                            let answer = '';
+                            
+                            lines.forEach(line => {
+                                line = line.trim();
+                                if (line.startsWith('[') && line.includes('来源:')) {
+                                    sourceInfo = line;
+                                } else if (line.startsWith('Question:')) {
+                                    question = line;
+                                } else if (line.startsWith('Answer:')) {
+                                    answer = line;
+                                }
+                            });
+                            
+                            // 构建文档块内容
+                            let blockContent = '';
+                            if (sourceInfo) {
+                                blockContent += `<div class="source-info">${sourceInfo}</div>`;
+                            }
+                            if (question) {
+                                blockContent += `<div class="question-text">${question}</div>`;
+                            }
+                            if (answer) {
+                                blockContent += `<div class="answer-text">${answer}</div>`;
+                            }
+                            
+                            if (blockContent) {
+                                contextHtml += `<div class="context-item mb-3">
+                                    <strong>文档 ${index + 1}:</strong>
+                                    <div class="mt-2">${blockContent}</div>
+                                </div>`;
+                            }
+                        }
+                    });
+                    
+                    // 如果没有按---分割成功，尝试其他方式
+                    if (!contextHtml) {
+                        // 尝试按[数字] 来源:分割
+                        const sourceBlocks = data.context_preview.split(/\[\d+\]\s+来源:/).filter(block => block.trim());
+                        
+                        if (sourceBlocks.length > 1) {
+                            contextHtml = '';
+                            sourceBlocks.forEach((block, index) => {
+                                if (block.trim()) {
+                                    // 重新添加来源前缀
+                                    const fullBlock = index === 0 ? block : `[${index}] 来源: ${block}`;
+                                    contextHtml += `<div class="context-item mb-3">
+                                        <strong>文档 ${index + 1}:</strong>
+                                        <div class="mt-2"><code>${fullBlock}</code></div>
+                                    </div>`;
+                                }
+                            });
+                        }
+                    }
+                    
+                    // 最后的备选方案：如果以上都失败，整体显示
+                    if (!contextHtml) {
+                        contextHtml = `<div class="context-item">
+                            <code>${data.context_preview}</code>
+                        </div>`;
+                    }
+                    
+                    message += `<details class="context-preview">
+                        <summary>📋 查看检索上下文</summary>
+                        <div class="mt-3">
+                            ${contextHtml}
+                        </div>
+                    </details>`;
+                }
+                    
+                    addMessage('ai', message);
+                } else {
+                    console.error('❌ API返回错误:', data);
+                    const errorMsg = data ? (data.message || '未知错误') : '响应格式错误';
+                    addMessage('ai', `抱歉，处理您的请求时出错：${errorMsg}`);
+                }
+                
+            } catch (error) {
+                console.error('💥 请求失败:', error);
+                addMessage('ai', `连接错误: ${error.message}<br><br>请确保：<br>1. 后端服务正在运行<br>2. 访问地址: ${BACKEND_URL}<br>3. 没有防火墙阻止`);
+            } finally {
+                // 恢复界面
+                document.getElementById('typingIndicator').classList.remove('active');
+                sendBtn.disabled = false;
+                queryInput.focus();
+            }
+        }
+
+
+        // 添加消息
+        function addMessage(type, content) {
+            const messagesContainer = document.getElementById('chatMessages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            
+            const time = new Date().toLocaleTimeString('zh-CN', { 
+                hour: '2-digit', 
+                minute: '2-digit' 
+            });
+            
+            messageDiv.innerHTML = `
+                <div class="message-content">${content}</div>
+                <div class="message-time">${type === 'user' ? '您' : 'AI助手'} · ${time}</div>
+            `;
+            
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        // 清空历史
+        function clearHistory() {
+            if (confirm('确定要清空所有对话记录吗？')) {
+                const messagesContainer = document.getElementById('chatMessages');
+                messagesContainer.innerHTML = `
+                    <div class="message ai">
+                        <div class="message-content">
+                            对话已清空。有什么新的问题吗？
+                        </div>
+                        <div class="message-time">AI助手 · 刚刚</div>
+                    </div>
+                `;
+            }
+        }
+
+        // 页面加载完成后聚焦输入框
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('queryInput').focus();
+            console.log('✅ 页面加载完成，后端地址:', BACKEND_URL);
+        });
+    </script>
+</body>
+</html>
