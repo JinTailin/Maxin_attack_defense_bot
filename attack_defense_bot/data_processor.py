@@ -11,6 +11,9 @@ def extract_context(search_resp: Dict[str, Any], max_chars: int = 1600) -> str:
     files = data.get("files") or data.get("data") or data.get("results") or []
     if not isinstance(files, list):
         return ""
+    
+    # 筛掉相似性得分低于0.6的数据
+    files = [item for item in files if item.get("score")>=0.6]
 
     chunks: List[str] = []
     for i, item in enumerate(files, 1):
@@ -37,6 +40,9 @@ def files_to_citations(search_resp: Dict[str, Any]) -> str:
     
     if not isinstance(files, list):
         return ""
+    
+    # 筛掉相似性得分低于0.6的数据
+    files = [item for item in files if item.get("score")>=0.6]
 
     citations = []
     for i, item in enumerate(files, 1):

@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from attack_defense_bot.utils import BASE_URL
 import uvicorn
 import sys
 import os
@@ -31,7 +32,7 @@ async def query(request: QueryRequest):
     try:
         # 初始化设置和客户端
         settings = Settings()
-        api = APIClient(base_url="http://10.1.0.220:9002/api")
+        api = APIClient(base_url=BASE_URL)
         
         # 调用 RAG 流程
         result = rag_dialogue_flow(api, settings, request.query)
