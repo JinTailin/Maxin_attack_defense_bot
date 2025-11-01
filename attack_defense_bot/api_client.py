@@ -87,11 +87,6 @@ class APIClient:
         score_threshold: float = 0.0,
         expr: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """
-        相似文件检索（a.docx）
-        - metric_type 大写（COSINE/L2/...）
-        - expr 可选
-        """
         url = self._url(f"/databases/{db_name}/search")
         payload: Dict[str, Any] = {
             "token": token,
@@ -104,6 +99,21 @@ class APIClient:
             payload["expr"] = expr
         resp = self.session.post(url, headers=self.headers, json=payload, timeout=self.timeout)
         return _parse_response(resp)
+
+    # 可选：更直观的别名
+    def search_files(
+        self, database_name: str, token: str, query: str, top_k: int = 10,
+        metric_type: str = "COSINE", score_threshold: float = 0.0, expr: Optional[str] = None
+    ) -> Dict[str, Any]:
+        return self.search(
+            db_name=database_name,
+            query=query,
+            token=token,
+            top_k=top_k,
+            metric_type=metric_type,
+            score_threshold=score_threshold,
+            expr=expr,
+        )
 
     def dialogue(
         self,
