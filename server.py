@@ -72,7 +72,7 @@ async def query(request: QueryRequest):
         settings = Settings()
         # 轻量收紧，减少误注入（可按需调整/注释）
         settings.top_k = 3
-        settings.score_threshold = max(getattr(settings, "score_threshold", 0.0), 0.75)
+        settings.score_threshold = max(getattr(settings, "score_threshold", 0.0), 0.6)
         settings.max_ctx_chars = min(getattr(settings, "max_ctx_chars", 1600), 1000)
 
         api = APIClient(base_url=settings.base_url, timeout=settings.timeout)
