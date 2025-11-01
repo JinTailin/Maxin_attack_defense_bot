@@ -24,7 +24,7 @@ from typing import Any, Dict, Optional, List
 from . import get_logger, setup_logging
 from .config import Settings, token_for_db
 from .api_client import APIClient
-from .data_processor import extract_context, files_to_citations
+from .data_processor import extract_context, files_to_citations, merge_hits_by_source  # 添加导入
 from .prompt_builder import build_prompt
 from .guard import validate_user_input, validate_prompt
 
@@ -56,7 +56,7 @@ def rag_dialogue_flow(
     """
     RAG 对话流：
     - 支持 expr 过滤（Milvus 表达式）
-    - 支持检索为空或上下文为空时回退 direct，避免“冷场”
+    - 支持检索为空或上下文为空时回退 direct，避免"冷场"
     - 对检索结果做简单日志采样
     """
     ok, safe_text = validate_user_input(query)
@@ -92,9 +92,16 @@ def rag_dialogue_flow(
         log.info("检索为空，回退 direct")
         return direct_dialogue_flow(api, settings, query)
 
-    # 提取上下文与引用
-    context = extract_context(search_resp, max_chars=settings.max_ctx_chars)
-    citations = files_to_citations(search_resp)
+    # 使用新的合并函数替代 extract_context 和 files_to_citations
+    agg_result = merge_hits_by_source(
+        search_resp,
+        score_threshold=settings.score_threshold,
+        per_chunk_max=300,
+        per_source_max=800,
+        max_ctx_chars=settings.max_ctx_chars,
+    )
+    context = agg_result["context"]
+    citations_str = agg_result["citations_str"]  # 使用字符串格式的引用
 
     if (not context) and fallback_to_direct:
         log.info("检索有结果但上下文为空（可能都被阈值过滤），回退 direct")
@@ -112,7 +119,7 @@ def rag_dialogue_flow(
     resp = api.dialogue(user_input=safe_text, token=settings.user_token, custom_prompt=cp)
     result = _normalize_dialogue_output(resp)
     result["context_preview"] = context
-    result["citations"] = citations
+    result["citations"] = citations_str  # 使用字符串格式的引用
     return result
 
 
@@ -124,25 +131,7 @@ def _normalize_dialogue_output(resp: Dict[str, Any]) -> Dict[str, Any]:
     return {"ok": False, "message": data, "raw": data}
 
 
-# -------------------- CLI --------------------
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        prog="Maxin_attack_defense_bot",
-        description="大模型安全实践：direct / rag / auto / multi-rag"
-    )
-    p.add_argument("--mode", choices=["direct", "rag", "auto"], default="direct", help="对话模式")
-    p.add_argument("--query", required=True, help="用户问题")
-    p.add_argument("--dbs", default=None, help="逗号分隔的多个库名，用于多库检索，如: db1,db2")
-    p.add_argument("--metric", default="COSINE", help="相似度度量，默认 COSINE")
-    p.add_argument("--top-k-total", type=int, default=None, help="多库合并后截断的总 top_k；默认=每库top_k×库数")
-    p.add_argument("--score-threshold", type=float, default=0.0, help="最小相似度阈值 0-1")
-    p.add_argument("--max-ctx-chars", type=int, default=1600, help="上下文拼接的最大字符数")
-    p.add_argument("--expr", default=None, help="Milvus 过滤表达式，可选")
-    p.add_argument("--client-timeout", type=int, default=None, help="HTTP 客户端超时（秒），默认沿用 Settings.timeout")
-    p.add_argument("--log-level", default="INFO", help="日志等级")
-    p.add_argument("--no-fallback", action="store_true", help="RAG 失败或空结果时不回退 direct")
-    return p.parse_args()
-
+# -------------------- 多库 RAG 相关函数 --------------------
 # 2) 工具函数：从 search 响应提取 hits，打上来源库标记
 def _hits_from_search(db_name: str, search_resp: Dict[str, Any]) -> List[Dict[str, Any]]:
     data = search_resp.get("data", {}) or {}
@@ -237,7 +226,7 @@ def rag_dialogue_flow_multi(
     cap = total_top_k or (per_k * len(dbs))
     merged = all_hits[:cap]
 
-    # 构造一个“合成的检索响应”喂给 extract_context / files_to_citations
+    # 构造一个"合成的检索响应"喂给 merge_hits_by_source
     merged_resp = {
         "http_status": 200,
         "data": {
@@ -246,8 +235,16 @@ def rag_dialogue_flow_multi(
         }
     }
 
-    context = extract_context(merged_resp, max_chars=settings.max_ctx_chars)
-    citations = files_to_citations(merged_resp)
+    # 使用新的合并函数替代 extract_context 和 files_to_citations
+    agg_result = merge_hits_by_source(
+        merged_resp,
+        score_threshold=settings.score_threshold,
+        per_chunk_max=300,
+        per_source_max=800,
+        max_ctx_chars=settings.max_ctx_chars,
+    )
+    context = agg_result["context"]
+    citations_str = agg_result["citations_str"]  # 使用字符串格式的引用
 
     if (not context) and fallback_to_direct:
         log.info("合并后上下文为空（可能被阈值过滤），回退 direct")
@@ -264,7 +261,7 @@ def rag_dialogue_flow_multi(
     resp = api.dialogue(user_input=safe_text, token=settings.user_token, custom_prompt=cp)
     result = _normalize_dialogue_output(resp)
     result["context_preview"] = context
-    result["citations"] = citations
+    result["citations"] = citations_str  # 使用字符串格式的引用
     result["from_dbs"] = dbs
     return result
 
