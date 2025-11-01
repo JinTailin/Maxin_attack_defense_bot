@@ -100,7 +100,7 @@ def merge_hits_by_source(
         blocks.append(head + "\n" + g["text"])
     context = "\n\n---\n\n".join(blocks)
     if len(context) > max_ctx_chars:
-        context = context[:max_chars]
+        context = context[:max_ctx_chars]
 
     # 引用数组（前端可直接展示）
     citations = []

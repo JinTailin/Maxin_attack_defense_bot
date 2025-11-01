@@ -265,6 +265,24 @@ def rag_dialogue_flow_multi(
     result["from_dbs"] = dbs
     return result
 
+# -------------------- CLI --------------------
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        prog="Maxin_attack_defense_bot",
+        description="大模型安全实践：direct / rag / auto / multi-rag"
+    )
+    p.add_argument("--mode", choices=["direct", "rag", "auto"], default="direct", help="对话模式")
+    p.add_argument("--query", required=True, help="用户问题")
+    p.add_argument("--dbs", default=None, help="逗号分隔的多个库名，用于多库检索，如: db1,db2")
+    p.add_argument("--metric", default="COSINE", help="相似度度量，默认 COSINE")
+    p.add_argument("--top-k-total", type=int, default=None, help="多库合并后截断的总 top_k；默认=每库top_k×库数")
+    p.add_argument("--score-threshold", type=float, default=0.0, help="最小相似度阈值 0-1")
+    p.add_argument("--max-ctx-chars", type=int, default=1600, help="上下文拼接的最大字符数")
+    p.add_argument("--expr", default=None, help="Milvus 过滤表达式，可选")
+    p.add_argument("--client-timeout", type=int, default=None, help="HTTP 客户端超时（秒），默认沿用 Settings.timeout")
+    p.add_argument("--log-level", default="INFO", help="日志等级")
+    p.add_argument("--no-fallback", action="store_true", help="RAG 失败或空结果时不回退 direct")
+    return p.parse_args()
 
 def main() -> None:
     args = parse_args()
