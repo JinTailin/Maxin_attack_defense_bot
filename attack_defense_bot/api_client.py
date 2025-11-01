@@ -84,7 +84,7 @@ class APIClient:
         token: str,
         top_k: int = 10,
         metric_type: str = "COSINE",
-        score_threshold: float = 0.0,
+        score_threshold: float = 0.6,
         expr: Optional[str] = None,
     ) -> Dict[str, Any]:
         url = self._url(f"/databases/{db_name}/search")
