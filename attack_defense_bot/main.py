@@ -1,28 +1,23 @@
 # ================================
-# file: attack_defense_bot/main.py
+# file: Maxin_attack_defense_bot/main.py
 # ================================
 """
 主入口：search → context → prompt → dialogue
-- 遵循 a.docx 中的 API 说明：
-  - BASE_URL: http://10.1.0.220:9002/api
-  - POST   /databases/{db}/search
-  - POST   /dialogue（支持 custom_prompt + user_input）
-- 仅依赖 requests，可直接运行；其他模块日后再拆分。
+- 遵循 a.docx 中的 API 说明
+- API 客户端请统一使用 Maxin_attack_defense_bot.api_client.APIClient
+- 配置请统一使用 Maxin_attack_defense_bot.config.Settings
 
 用法：
   1) pip install requests
-  2) python -m attack_defense_bot.main --mode direct --query "防火墙的作用是什么？"
-  3) python -m attack_defense_bot.main --mode rag --db common_dataset --top-k 5 --query "如何防御SQL注入？"
+  2) python -m Maxin_attack_defense_bot.main --mode direct --query "防火墙的作用是什么？"
+  3) python -m Maxin_attack_defense_bot.main --mode rag --db common_dataset --top-k 5 --query "如何防御SQL注入？"
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
-
-import requests
+from typing import Any, Dict, Optional
 
 from . import get_logger, setup_logging
 from .config import Settings, token_for_db
@@ -30,83 +25,8 @@ from .api_client import APIClient
 from .data_processor import extract_context, files_to_citations
 from .prompt_builder import build_prompt
 from .guard import validate_user_input, validate_prompt
-from .utils import BASE_URL, USER_TOKEN, COMMON_DB_TOKEN, COMMON_DB_NAME, DEFAULT_METRIC, TIMEOUT  
 
 log = get_logger(__name__)
-
-@dataclass
-class Settings:
-    base_url: str = BASE_URL
-    user_token: str = USER_TOKEN
-    common_db_token: str = COMMON_DB_TOKEN
-    db_name: str = COMMON_DB_NAME
-    metric_type: str = DEFAULT_METRIC
-    timeout: int = TIMEOUT
-    top_k: int = 5
-    score_threshold: float = 0.0
-    max_ctx_chars: int = 1600
-
-# -------------------- API 封装（按 a.docx） --------------------
-class APIClient:
-    def __init__(self, base_url: str, timeout: int = TIMEOUT):
-        self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
-        self.session = requests.Session()
-        self.headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
-
-    def dialogue(
-        self,
-        user_input: str,
-        token: str,
-        custom_prompt: Optional[str] = None,
-        temperature: float = 0.7,
-        max_tokens: int = 300,
-    ) -> Dict[str, Any]:
-        url = f"{self.base_url}/dialogue"
-        payload: Dict[str, Any] = {
-            "user_input": user_input,
-            "token": token,
-            "temperature": float(temperature),
-            "max_tokens": int(max_tokens),
-        }
-        if custom_prompt:
-            payload["custom_prompt"] = custom_prompt
-        resp = self.session.post(url, headers=self.headers, json=payload, timeout=self.timeout)
-        return _parse_response(resp)
-
-    def search(
-        self,
-        db_name: str,
-        query: str,
-        token: str,
-        top_k: int = 5,
-        metric_type: str = DEFAULT_METRIC,
-        score_threshold: float = 0.0,
-        expr: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        url = f"{self.base_url}/databases/{db_name}/search"
-        payload: Dict[str, Any] = {
-            "token": token,
-            "query": query,
-            "top_k": int(top_k),
-            "metric_type": (metric_type or DEFAULT_METRIC).upper(),
-            "score_threshold": float(score_threshold),
-        }
-        if expr:
-            payload["expr"] = expr
-        resp = self.session.post(url, headers=self.headers, json=payload, timeout=self.timeout)
-        return _parse_response(resp)
-
-
-def _parse_response(resp: requests.Response) -> Dict[str, Any]:
-    try:
-        data = resp.json()
-    except Exception:
-        data = {"status": "error", "message": resp.text}
-    return {"http_status": resp.status_code, "data": data}
 
 
 # -------------------- 流程 --------------------
@@ -123,18 +43,13 @@ def direct_dialogue_flow(api: APIClient, settings: Settings, query: str) -> Dict
     resp = api.dialogue(user_input=safe_text, token=settings.user_token, custom_prompt=cp)
     return _normalize_dialogue_output(resp)
 
-def _token_for_db(db_name: str, settings: Settings) -> str:
-    # 共享库名写死判断，避免把 COMMON_DB_NAME 改错
-    if db_name.strip().lower() == "common_dataset":
-        return settings.common_db_token
-    return settings.user_token
 
 def rag_dialogue_flow(api: APIClient, settings: Settings, query: str) -> Dict[str, Any]:
     ok, safe_text = validate_user_input(query)
     if not ok:
         return {"ok": False, "message": safe_text}
 
-    
+    # 检索用对应库的 token（公共库用 common token，其他库用 user token）
     token_for_this_db = token_for_db(settings.db_name, settings)
 
     search_resp = api.search(
@@ -149,9 +64,8 @@ def rag_dialogue_flow(api: APIClient, settings: Settings, query: str) -> Dict[st
     if search_resp.get("http_status") != 200 or search_resp.get("data", {}).get("status") != "success":
         return {"ok": False, "message": f"检索失败: {search_resp}"}
 
-    # 提取上下文
+    # 提取上下文与引用
     context = extract_context(search_resp, max_chars=settings.max_ctx_chars)
-    # 生成引用
     citations = files_to_citations(search_resp)
 
     custom_prompt = build_prompt(context=context, mode="rag")
@@ -159,7 +73,7 @@ def rag_dialogue_flow(api: APIClient, settings: Settings, query: str) -> Dict[st
     if not ok:
         return {"ok": False, "message": cp}
 
-    # 对话使用小组 token
+    # 对话通常使用个人/小组对话 token，这里沿用 settings.user_token
     resp = api.dialogue(user_input=safe_text, token=settings.user_token, custom_prompt=cp)
     result = _normalize_dialogue_output(resp)
     result["context_preview"] = context
@@ -178,18 +92,18 @@ def _normalize_dialogue_output(resp: Dict[str, Any]) -> Dict[str, Any]:
 # -------------------- CLI --------------------
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        prog="attack_defense_bot",
+        prog="Maxin_attack_defense_bot",
         description="大模型安全实践：最小可用主入口（含 direct / rag 两条链路）",
     )
     p.add_argument("--mode", choices=["direct", "rag"], default="direct", help="对话模式")
     p.add_argument("--query", required=True, help="用户问题")
-    p.add_argument("--db", default=COMMON_DB_NAME, help="RAG 模式下的数据库名，默认 common_dataset")
-    p.add_argument("--metric", default=DEFAULT_METRIC, help="相似度度量，默认 cosine")
+    p.add_argument("--db", default="common_dataset", help="RAG 模式下的数据库名，默认 common_dataset")
+    p.add_argument("--metric", default="COSINE", help="相似度度量，默认 COSINE")
     p.add_argument("--top-k", type=int, default=5, help="RAG 检索数量")
     p.add_argument("--score-threshold", type=float, default=0.0, help="最小相似度阈值 0-1")
     p.add_argument("--max-ctx-chars", type=int, default=1600, help="上下文拼接的最大字符数")
     p.add_argument("--log-level", default="INFO", help="日志等级")
-    p.add_argument("--expr", default=None, help="Milvus 过滤表达式，可选")
+    p.add_argument("--expr", default=None, help="Milvus 过滤表达式，可选（保留参数位，当前未使用）")
     return p.parse_args()
 
 
@@ -197,6 +111,7 @@ def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
 
+    # 通过 Settings 统一读取默认配置与环境变量
     settings = Settings(
         db_name=args.db,
         metric_type=args.metric,
@@ -205,7 +120,8 @@ def main() -> None:
         max_ctx_chars=args.max_ctx_chars,
     )
 
-    api = APIClient(base_url=BASE_URL, timeout=settings.timeout)
+    # 使用 settings.base_url，而不是任何 utils 常量，避免配置分散与重复
+    api = APIClient(base_url=settings.base_url, timeout=settings.timeout)
 
     if args.mode == "direct":
         result = direct_dialogue_flow(api, settings, args.query)
@@ -217,5 +133,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    # breakpoint()
     main()

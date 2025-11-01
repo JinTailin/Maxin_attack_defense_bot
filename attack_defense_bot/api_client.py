@@ -1,6 +1,3 @@
-# ================================
-# file: Maxin_attack_defense_bot/api_client.py
-# ================================
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
@@ -23,13 +20,14 @@ def _parse_response(resp: requests.Response) -> Dict[str, Any]:
 class APIClient:
     """
     a.docx 定义的后端 API 封装：
-      - POST   /api/databases
-      - GET    /api/databases
-      - POST   /api/databases/{db}/files
-      - GET    /api/databases/{db}/files
-      - DELETE /api/databases/{db}/files/{file_id}
-      - POST   /api/databases/{db}/search
-      - POST   /api/dialogue
+      - POST   /databases
+      - GET    /databases
+      - POST   /databases/{db}/files
+      - GET    /databases/{db}/files
+      - DELETE /databases/{db}/files/{file_id}
+      - POST   /databases/{db}/search
+      - POST   /dialogue
+    注意：这里的 base_url 期望传入 .../api，不含末尾斜杠
     """
 
     def __init__(self, base_url: str, timeout: int = 30, session: Optional[requests.Session] = None):
@@ -43,6 +41,7 @@ class APIClient:
 
     # ---------- 工具 ----------
     def _url(self, path: str) -> str:
+        # 统一拼接，不重复 /
         return f"{self.base_url}{path}"
 
     # ---------- 数据库相关 ----------
@@ -129,3 +128,4 @@ class APIClient:
             payload["custom_prompt"] = custom_prompt
         resp = self.session.post(url, headers=self.headers, json=payload, timeout=self.timeout)
         return _parse_response(resp)
+
