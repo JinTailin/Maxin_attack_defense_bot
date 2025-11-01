@@ -42,12 +42,51 @@ class QueryRequest(BaseModel):
     mode: str = "rag"
     query: str
 
+def is_smalltalk(q: str) -> bool:
+    q = (q or "").strip().lower()
+    if len(q) <= 3:
+        return True
+    small = ["你好", "在吗", "谢谢", "哈哈", "嗨", "hello", "hi", "ok", "好的", "？", "我是人", "你是谁", "我是谁", "测试"]
+    return any(s in q for s in small)
+
+def is_security_topic(q: str) -> bool:
+    ql = (q or "").lower()
+    kws = [
+        "安全", "防火墙", "入侵", "攻击", "漏洞", "补丁", "xss", "sql", "注入", "csrf", "rce", "越权",
+        "口令", "弱口令", "加密", "解密", "权限", "渗透", "端口", "审计", "日志", "合规", "等保",
+        "waf", "ids", "ips", "ddos", "木马", "勒索", "钓鱼", "蜜罐", "沙箱", "威胁情报"
+    ]
+    return any(k in ql for k in kws)
+
+def should_use_rag(q: str) -> bool:
+    # 闲聊或非安全主题 -> 不用 RAG
+    if is_smalltalk(q):
+        return False
+    if not is_security_topic(q):
+        return False
+    return True
+
 @app.post("/api/query")
 async def query(request: QueryRequest):
     try:
-        # 初始化设置和客户端
         settings = Settings()
-        api = APIClient(base_url=BASE_URL)
+        # 轻量收紧，减少误注入（可按需调整/注释）
+        settings.top_k = 3
+        settings.score_threshold = max(getattr(settings, "score_threshold", 0.0), 0.75)
+        settings.max_ctx_chars = min(getattr(settings, "max_ctx_chars", 1600), 1000)
+
+        api = APIClient(base_url=settings.base_url, timeout=settings.timeout)
+
+        mode = (request.mode or "auto").lower()
+
+        # 显式 direct 仍走 direct
+        if mode == "direct":
+            return JSONResponse(direct_dialogue_flow(api, settings, request.query), 200)
+
+        # 新增：意图路由（前端无需改）
+        if not should_use_rag(request.query):
+            # 非安全/闲聊 -> 不查库，给出简短引导式回复
+            return JSONResponse(direct_dialogue_flow(api, settings, request.query), 200)
 
         # 默认两个库：自建库 + 通用库（可通过环境变量覆盖）
         primary_db = os.getenv("RAG_PRIMARY_DB", "student_Group10_corpus")
