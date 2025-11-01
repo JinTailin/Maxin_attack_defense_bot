@@ -121,7 +121,7 @@ class APIClient:
         token: str,
         custom_prompt: Optional[str] = None,
         temperature: float = 0.7,
-        max_tokens: int = 150,
+        max_tokens: int = 300,
     ) -> Dict[str, Any]:
         """
         对话（a.docx）
