@@ -124,7 +124,7 @@ class APIClient:
         max_tokens: int = 300,
     ) -> Dict[str, Any]:
         """
-        对话（a.docx）
+        对话
         - 支持 custom_prompt 注入系统安全指令
         """
         url = self._url("/dialogue")
