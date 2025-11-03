@@ -1,6 +1,3 @@
-# ================================
-# file: attack_defense_bot/guard.py
-# ================================
 import re
 import requests
 import time

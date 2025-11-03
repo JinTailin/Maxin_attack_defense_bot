@@ -1,6 +1,3 @@
-# ================================
-# file: Maxin_attack_defense_bot/main.py
-# ================================
 """
 主入口：search → context → prompt → dialogue
 - 遵循 a.docx 中的 API 说明

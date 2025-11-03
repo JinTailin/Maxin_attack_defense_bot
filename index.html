@@ -274,16 +274,16 @@
             background: rgba(102, 126, 234, 0.1);
         }
 
-        /* 引用在折叠框内的样式 - 更清晰的分隔 */
+        /* 引用在折叠框内的样式 */
         .context-preview .citation {
             background: rgba(102, 126, 234, 0.15);
             border-left: 3px solid var(--primary-color);
             padding: 0.8rem;
-            margin: 0.8rem 0;  /* 增加间距 */
+            margin: 0.8rem 0;
             border-radius: 5px;
             font-size: 0.9rem;
             transition: all 0.3s ease;
-            border-bottom: 1px solid rgba(102, 126, 234, 0.2);  /* 添加底部边框 */
+            border-bottom: 1px solid rgba(102, 126, 234, 0.2);
         }
 
         .context-preview .citation:hover {
@@ -310,17 +310,17 @@
             color: #667eea;
         }
 
-        /* 上下文项样式 - 与引用样式保持一致 */
+        /* 上下文项样式 */
         .context-preview .context-item {
             background: rgba(0, 0, 0, 0.4);
-            border-left: 3px solid #28a745;  /* 使用绿色区分上下文 */
+            border-left: 3px solid #28a745;
             padding: 0.8rem;
             margin: 0.8rem 0;
             border-radius: 5px;
             font-size: 0.9rem;
             transition: all 0.3s ease;
             border-bottom: 1px solid rgba(40, 167, 69, 0.2);
-            font-family: 'Courier New', monospace;  /* 等宽字体更适合代码/文本 */
+            font-family: 'Courier New', monospace;
         }
 
         .context-preview .context-item:hover {
@@ -356,7 +356,7 @@
             color: #764ba2;
         }
 
-        /* 当有多个details时，给第二个（上下文）不同的图标颜色 */
+        /* 当有多个details时，给上下文不同的图标颜色 */
         .context-preview:nth-of-type(2) summary {
             color: #28a745;
         }
@@ -461,7 +461,7 @@
             }
         }
 
-        // 发送查询 - 修改引用为可折叠
+        // 发送查询
         async function sendQuery() {
             const queryInput = document.getElementById('queryInput');
             const query = queryInput.value.trim();
@@ -506,12 +506,12 @@
                 if (data && data.ok === true) {
                     let message = data.response || '抱歉，无法回答您的问题。';
                     
-                // 处理引用数据 - 修复分割问题
+                // 处理引用数据
                 if (data.citations) {
                     console.log('🔍 处理引用数据...');
                     console.log('原始引用数据:', data.citations);
                     
-                    // 确保citations是数组
+                    // 确保 citations 是数组
                     let citationsArray = [];
                     
                     if (Array.isArray(data.citations)) {
@@ -548,7 +548,7 @@
                             citationsArray = [citationsStr];
                         }
                         
-                        // 尝试解析JSON（以防是JSON字符串）
+                        // 尝试解析 JSON （以防是 JSON 字符串）
                         if (citationsArray.length === 1) {
                             try {
                                 const parsed = JSON.parse(citationsArray[0]);
@@ -556,7 +556,7 @@
                                     citationsArray = parsed;
                                 }
                             } catch {
-                                // 不是JSON，保持原样
+                                // 不是 JSON ，保持原样
                             }
                         }
                     } else {
@@ -566,9 +566,9 @@
                     
                     // 清理和去重
                     citationsArray = citationsArray
-                        .map(citation => citation.replace(/^["'"]|["'"]$/g, '').trim()) // 去掉引号
+                        .map(citation => citation.replace(/^["'"]|["'"]$/g, '').trim())  // 去掉引号
                         .filter(citation => citation.length > 0)
-                        .filter((citation, index, arr) => arr.indexOf(citation) === index); // 去重
+                        .filter((citation, index, arr) => arr.indexOf(citation) === index);  // 去重
                     
                     console.log('📚 处理后的引用数组:', citationsArray);
                     console.log('📚 引用数量:', citationsArray.length);
@@ -640,7 +640,7 @@
                         }
                     });
                     
-                    // 如果没有按---分割成功，尝试其他方式
+                    // 如果没有按 --- 分割成功，尝试其他方式
                     if (!contextHtml) {
                         // 尝试按[数字] 来源:分割
                         const sourceBlocks = data.context_preview.split(/\[\d+\]\s+来源:/).filter(block => block.trim());

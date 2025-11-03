@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-# file: server.py
 from __future__ import annotations
 
 import os
@@ -11,19 +9,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-# 添加项目路径（按你原有做法）
+# 添加项目路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # 读取基础配置
 from attack_defense_bot.utils import BASE_URL
 
-# 从 main 引入你已经实现的多库 RAG 流程与 direct 流程
-# 注：确保你的 main.py 暴露了 rag_dialogue_flow_multi 与 direct_dialogue_flow
+# 从 main 引入已经实现的多库 RAG 流程与 direct 流程
+# 注：确保 main.py 暴露了 rag_dialogue_flow_multi 与 direct_dialogue_flow
 from attack_defense_bot.main import (
     rag_dialogue_flow_multi,
     direct_dialogue_flow,
-    APIClient,   # 延用你原本从 main 暴露的 APIClient
-    Settings,    # 延用你原本从 main 暴露的 Settings
+    APIClient,   # 延用从 main 暴露的 APIClient
+    Settings,    # 延用从 main 暴露的 Settings
 )
 
 app = FastAPI(title="安全AI助手 API")
@@ -38,7 +36,7 @@ app.add_middleware(
 )
 
 class QueryRequest(BaseModel):
-    # 模式：默认 rag（你的 index 未传 mode，这里保持兼容）
+    # 模式：默认 rag
     mode: str = "rag"
     query: str
 
@@ -83,7 +81,7 @@ async def query(request: QueryRequest):
         if mode == "direct":
             return JSONResponse(direct_dialogue_flow(api, settings, request.query), 200)
 
-        # 新增：意图路由（前端无需改）
+        # 意图路由
         if not should_use_rag(request.query):
             # 非安全/闲聊 -> 不查库，给出简短引导式回复
             return JSONResponse(direct_dialogue_flow(api, settings, request.query), 200)
@@ -117,7 +115,7 @@ async def query(request: QueryRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# 提供前端页面（保持不变）
+# 提供前端页面
 @app.get("/")
 async def read_index():
     here = os.path.dirname(os.path.abspath(__file__))

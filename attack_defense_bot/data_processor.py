@@ -1,6 +1,3 @@
-# ================================
-# file: attack_defense_bot/data_processor.py
-# ================================
 from typing import List, Dict, Any, Tuple
 import hashlib
 
@@ -69,7 +66,7 @@ def merge_hits_by_source(
                 txt = txt[:per_chunk_max]
             g["texts"].append((sc, txt))
 
-    # 组内排序+限额
+    # 组内排序 + 限额
     merged_blocks: List[str] = []
     merged_groups: List[Dict[str, Any]] = []
     for (db, key), g in groups.items():
@@ -114,7 +111,7 @@ def merge_hits_by_source(
             "score": round(g["score"], 4),
         })
 
-    # 生成字符串格式的引用（保持与之前代码兼容）
+    # 生成字符串格式的引用
     citations_str_lines = []
     for i, g in enumerate(merged_groups, 1):
         meta = g["meta"] or {}

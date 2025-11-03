@@ -1,8 +1,3 @@
-# ================================
-# file: attack_defense_bot/prompt_builder.py
-# ================================
-
-# -------------------- 组合系统 Prompt + 用户输入 + context --------------------
 def build_prompt(context: str, mode: str = "direct") -> str:
     """
     构建最终发送给 LLM 的 Prompt。
