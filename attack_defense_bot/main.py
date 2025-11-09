@@ -23,7 +23,7 @@ from .config import Settings, token_for_db
 from .api_client import APIClient
 from .data_processor import extract_context, files_to_citations, merge_hits_by_source  # 添加导入
 from .prompt_builder import build_prompt
-from .guard import validate_user_input, validate_prompt
+from .guard import validate_user_input, validate_prompt, validate_output
 
 log = get_logger(__name__)
 
@@ -40,7 +40,16 @@ def direct_dialogue_flow(api: APIClient, settings: Settings, query: str) -> Dict
         return {"ok": False, "message": cp}
 
     resp = api.dialogue(user_input=safe_text, token=settings.user_token, custom_prompt=cp)
-    return _normalize_dialogue_output(resp)
+
+    result = _normalize_dialogue_output(resp)
+
+    if "response" in result.keys():
+        ok, output = validate_output(result['response'])
+        if not ok:
+            log.warning("不正当输出：%s", result['response'])
+            return {"ok": False, "message": output}
+    
+    return result
 
 
 def rag_dialogue_flow(
@@ -117,6 +126,13 @@ def rag_dialogue_flow(
     result = _normalize_dialogue_output(resp)
     result["context_preview"] = context
     result["citations"] = citations_str  # 使用字符串格式的引用
+
+    if "response" in result.keys():
+        ok, output = validate_output(result['response'])
+        if not ok:
+            log.warning("不正当输出：%s", result['response'])
+            return {"ok": False, "message": output}
+
     return result
 
 
@@ -260,6 +276,13 @@ def rag_dialogue_flow_multi(
     result["context_preview"] = context
     result["citations"] = citations_str  # 使用字符串格式的引用
     result["from_dbs"] = dbs
+
+    if "response" in result.keys():
+        ok, output = validate_output(result['response'])
+        if not ok:
+            log.warning("不正当输出：%s", result['response'])
+            return {"ok": False, "message": output}
+
     return result
 
 # -------------------- CLI --------------------
