@@ -81,7 +81,6 @@ cd python server.py
 │   ├── __init__.py                          # 包含模块初始化代码
 │   ├── api_client.py                        # 封装 search 和 dialogue 两个 HTTP 调用
 │   ├── config.py                            # 读取环境变量并保存常量
-│   ├── conversation.py                      # 保存多轮对话上下文（待实现）
 │   ├── data_processor.py                    # 对 /search 结果做二次整理
 │   ├── guard.py                             # 安全相关的保护逻辑，如输入校验、数据审计等
 │   ├── main.py                              # 完整流程入口
