@@ -1,7 +1,3 @@
-
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 """
 读取 JSONL 语料（每行一条 JSON），仅上传 language 为 Chinese 的样本。
 每条样本会被转换为中文块文本，并携带丰富的 metadata，批量上传到指定 DB。
@@ -27,7 +23,7 @@ import hashlib
 import locale
 from typing import List, Dict, Any, Tuple, Iterable
 
-# -------- 兼容两套包名（与你现有脚本一致） --------
+# -------- 兼容两套包名 --------
 try:
     from attack_defense_bot.config import Settings, token_for_db
     from attack_defense_bot.api_client import APIClient

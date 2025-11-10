@@ -1,7 +1,3 @@
-
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 """
 用途
 - 从 data 目录读取 TXT（可选含 MD）语料，清洗/切分/去噪/去重，并上传到指定 DB
@@ -31,7 +27,7 @@ import locale
 import hashlib
 from typing import List, Dict, Any, Tuple
 
-# -------- 兼容两套包名（与你现有项目一致） --------
+# -------- 兼容两套包名 --------
 try:
     from attack_defense_bot.config import Settings, token_for_db
     from attack_defense_bot.api_client import APIClient
@@ -189,7 +185,7 @@ def detect_sections(text: str) -> List[Tuple[str, str]]:
     return [(t, b) for t, b in sections if b and len(b) > 50]
 
 
-# -------- 课件导向的“摘要 + 伪问句” --------
+# -------- 摘要 + 伪问句 --------
 def chinese_ratio(s: str) -> float:
     if not s:
         return 0.0
